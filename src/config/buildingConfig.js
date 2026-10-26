@@ -1,42 +1,55 @@
 // src/config/buildingConfig.js
 
 // ============================================================================
+// FIREBASE CLOUD CONFIGURATION (PROJECT: dtth-f2c8e)
+// ============================================================================
+export const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDSyGu6lrZy4i560cqMBhN-XR0OX9VT5G4",
+  authDomain: "dtth-f2c8e.firebaseapp.com",
+  projectId: "dtth-f2c8e",
+  storageBucket: "dtth-f2c8e.firebasestorage.app",
+  messagingSenderId: "688251611682",
+  appId: "1:688251611682:web:21a33dd8dfbf2e72a5f87b",
+  measurementId: "G-93C0PFJ6JZ"
+};
+
+// ============================================================================
 // ARCHITECTURAL DIMENSIONS & GRID
 // ============================================================================
 export const BUILDING_DIMENSIONS = {
-  totalWidth: 46.0,       // X: -23m to +23m
-  totalDepth: 11.6,       // Z: -5.8m to +5.8m
-  corridorDepth: 3.2,     // Z: +2.6m to +5.8m
-  roomDepth: 8.4,         // Z: -5.8m to +2.6m
-  floorHeight: 4.2,       // Ground Y=0.0m, First Floor Y=4.2m, Roof Y=8.4m
+  totalWidth: 46.0,
+  totalDepth: 11.6,
+  corridorDepth: 3.2,
+  roomDepth: 8.4,
+  floorHeight: 4.2,
   wallThickness: 0.24,
   parapetHeight: 1.12,
   dadoHeight: 1.25,
   doorWidth: 1.25,
   doorHeight: 2.35,
-  stairBayWidth: 6.0,     // X: -3.0m to +3.0m
-  roomWidth: 10.0         // 2 rooms per wing on each floor
+  stairBayWidth: 6.0,
+  roomWidth: 10.0
 };
 
 // ============================================================================
 // COLOR PALETTE (MATCHING REAL PHOTOGRAPHS)
 // ============================================================================
 export const PALETTE = {
-  facadeCream: 0xF3EFE0,       // Warm off-white exterior facade
-  terracottaTrim: 0xC64932,    // Red-oxide / terracotta pilasters & trim
-  interiorUpper: 0xF5F2E6,     // Cream upper interior wall
-  interiorDado: 0x96999A,      // Neutral grey lower dado wall
-  corridorTile: 0x6E564E,      // Earthy terracotta corridor vitrified tiles
-  roomFloorTile: 0xD8D6D0,     // Polished classroom floor
-  lowerStairGranite: 0x26282A, // Black/dark grey granite lower stair treads
-  upperStairCement: 0xAEB2B5,  // Cement finish upper stair treads
-  railingSteel: 0x181A1C,      // Black steel balusters
-  handrailWood: 0xDFDCD5,      // Weathered white wood handrail
-  woodDoor: 0x5C3824,          // Teak/mahogany doors
-  shoeRackWood: 0x3D221A,      // Dark mahogany shoe racks
-  signBlue: 0x1B56A8,          // Department royal blue signboard
-  porticoPillar: 0x2A2D30,     // Polished granite entrance pillars
-  aluminumFrame: 0xD0D5DD,     // Sliding aluminum window frame
+  facadeCream: 0xF3EFE0,
+  terracottaTrim: 0xC64932,
+  interiorUpper: 0xF5F2E6,
+  interiorDado: 0x96999A,
+  corridorTile: 0x6E564E,
+  roomFloorTile: 0xD8D6D0,
+  lowerStairGranite: 0x26282A,
+  upperStairCement: 0xAEB2B5,
+  railingSteel: 0x181A1C,
+  handrailWood: 0xDFDCD5,
+  woodDoor: 0x5C3824,
+  shoeRackWood: 0x3D221A,
+  signBlue: 0x1B56A8,
+  porticoPillar: 0x2A2D30,
+  aluminumFrame: 0xD0D5DD,
   fireRed: 0xD92626
 };
 
@@ -44,19 +57,16 @@ export const PALETTE = {
 // MANDATORY 8 ROOMS (2 FLOORS: 2 LEFT + 2 RIGHT OF CENTRAL STAIRCASE)
 // ============================================================================
 export const ROOM_MANIFEST = [
-  // Ground Floor (Y = 0.0m)
   { id: 'G-L1', name: 'Dept. Seminar Hall & Library', code: 'GF-L1', floor: 0, side: 'LEFT', xMin: -23.0, xMax: -13.0, doorX: -19.2, type: 'classroom' },
   { id: 'G-L2', name: 'AI Foundations Classroom G01', code: 'GF-L2', floor: 0, side: 'LEFT', xMin: -13.0, xMax: -3.0, doorX: -9.2, type: 'classroom' },
   { id: 'G-R1', name: 'Embedded & VLSI Systems Lab', code: 'GF-R1', floor: 0, side: 'RIGHT', xMin: 3.0, xMax: 13.0, doorX: 6.8, type: 'lab' },
   { id: 'G-R2', name: 'Department Office & HOD Chamber', code: 'GF-R2', floor: 0, side: 'RIGHT', xMin: 13.0, xMax: 23.0, doorX: 16.8, type: 'office' },
-  // First Floor (Y = 4.2m)
   { id: 'F-L1', name: 'AI & Machine Learning Lab 1', code: '1F-L1', floor: 1, side: 'LEFT', xMin: -23.0, xMax: -13.0, doorX: -19.2, type: 'lab' },
   { id: 'F-L2', name: 'Deep Learning & Vision Lab 2', code: '1F-L2', floor: 1, side: 'LEFT', xMin: -13.0, xMax: -3.0, doorX: -9.2, type: 'lab' },
   { id: 'F-R1', name: 'Smart Classroom 101 (AIML)', code: '1F-R1', floor: 1, side: 'RIGHT', xMin: 3.0, xMax: 13.0, doorX: 6.8, type: 'classroom' },
   { id: 'F-R2', name: 'Smart Classroom 102 (AIML)', code: '1F-R2', floor: 1, side: 'RIGHT', xMin: 13.0, xMax: 23.0, doorX: 16.8, type: 'classroom' }
 ];
 
-// Teleport Navigation Presets
 export const TELEPORT_ZONES = {
   1: { name: 'Exterior Facade', pos: [0, 0, 22], yaw: 0, orbit: true },
   2: { name: 'Main Entrance Portico', pos: [0, 0, 9.5], yaw: 0, orbit: false },
@@ -66,20 +76,13 @@ export const TELEPORT_ZONES = {
   6: { name: 'Smart Classroom (F-R1)', pos: [8.0, 4.2, -1.0], yaw: 0, orbit: false }
 };
 
-// ============================================================================
-// TECHYON TWIN-QUEST RULES & CONFIGURATION
-// ============================================================================
 export const QUEST_RULES = {
   totalLegitimateFlags: 5,
   decoyPenaltySeconds: 30,
-  interactionRadius: 2.5,
-  allowCollectionDuringPenalty: true,
-  scoringMode: 'EFFECTIVE_TIME' // Rank by Flags Collected, then (Elapsed + Penalties)
+  interactionRadius: 2.5
 };
 
-// 5 Legitimate Collectible Flags + 3 Decoys (Safe metadata; secret PINs are validated in the service layer)
 export const PUBLIC_FLAG_MANIFEST = [
-  // 5 Legitimate Flags
   {
     flagId: 'FLAG-01',
     slotIndex: 0,
@@ -140,13 +143,11 @@ export const PUBLIC_FLAG_MANIFEST = [
     color: 0xF59E0B,
     kind: 'LEGITIMATE'
   },
-
-  // 3 Decoys (+30s penalty)
   {
     flagId: 'DECOY-01',
     code: 'DX-MIRAGE-1',
     title: 'Unstable Signal Node (GF-L2)',
-    clueHint: 'Inspect closely: erratic crimson-amber pulse indicates a decoy trap.',
+    clueHint: 'Inspect closely: erratic crimson pulse indicates a decoy trap.',
     roomCode: 'GF-L2',
     floor: 0,
     position: [-4.4, 0.0, -4.5],
@@ -177,7 +178,6 @@ export const PUBLIC_FLAG_MANIFEST = [
   }
 ];
 
-// 12 Participating Teams (Supports 10-15 teams concurrently)
 export const REGISTERED_TEAMS = [
   { teamId: 'team-01', teamName: 'Team 01 • CyberSentinels', color: 0x14B8A6, shirtColor: 0x0D9488 },
   { teamId: 'team-02', teamName: 'Team 02 • NeuralNomads', color: 0x3B82F6, shirtColor: 0x2563EB },
