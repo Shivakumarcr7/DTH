@@ -14,6 +14,7 @@ import {
 
 import {
   FIREBASE_CONFIG,
+  ADMIN_PASSCODE,
   BUILDING_DIMENSIONS as DIM,
   PALETTE,
   CAMPUS_BUILDINGS,
@@ -25,8 +26,10 @@ import {
   REGISTERED_TEAMS
 } from './config/buildingConfig.js';
 
+const IS_ADMIN_PAGE = document.body.dataset.page === 'admin';
+
 // ============================================================================
-// 1. FIREBASE CLOUD SERVICE (WITH OFFLINE / LOCAL FALLBACK)
+// 1. FIREBASE CLOUD SERVICE
 // ============================================================================
 const DEV_PINS = Object.freeze({
   'FLAG-01': '0047',
@@ -54,9 +57,9 @@ class FirebaseGameService {
     if (!this.connected) return;
     const now = Date.now();
     const waypoints = [
-      [0, 0, 12.5], [-16.0, 0, 4.1], [-66.0, 0, 12.5], [66.0, 0, 12.5],
-      [22.0, 0, 52.0], [-1.4, 2.1, -4.2], [-66.0, 4.2, 4.2], [66.0, 4.2, 4.2],
-      [7.5, 4.2, 4.2], [-66.0, 8.4, 4.2], [0.0, 4.2, 4.0], [18.0, 0, 64.0]
+      [0, 0, 12.5], [-16.0, 0, 4.1], [-68.0, 0, 14.5], [68.0, 0, 14.5],
+      [22.0, 0, 52.0], [-1.4, 2.1, -4.2], [-68.0, 4.2, 4.2], [68.0, 4.2, 4.2],
+      [7.5, 4.2, 4.2], [-68.0, 8.4, 4.2], [0.0, 4.2, 4.0], [18.0, 0, 64.0]
     ];
 
     for (let i = 0; i < REGISTERED_TEAMS.length; i++) {
@@ -79,44 +82,71 @@ class FirebaseGameService {
             startedAt: now,
             completedAt: null,
             status: 'IN_PROGRESS',
-            position: { x: wp[0], y: wp[1], z: wp[2], yaw: 0, anim: 'IDLE' },
+            position: { x: wp[0], y: wp[1], z: wp[2], yaw: 0, anim: 'IDLE', zone: 'AIML Portico' },
             lastUpdatedAt: now
           });
         }
-      } catch {
-        // Ignore seed error if rules restrict creation
-      }
+      } catch {}
+    }
+  }
+
+  async resetAllTeams() {
+    if (!this.connected) return;
+    const now = Date.now();
+    const waypoints = [
+      [0, 0, 12.5], [-16.0, 0, 4.1], [-68.0, 0, 14.5], [68.0, 0, 14.5],
+      [22.0, 0, 52.0], [-1.4, 2.1, -4.2], [-68.0, 4.2, 4.2], [68.0, 4.2, 4.2],
+      [7.5, 4.2, 4.2], [-68.0, 8.4, 4.2], [0.0, 4.2, 4.0], [18.0, 0, 64.0]
+    ];
+    for (let i = 0; i < REGISTERED_TEAMS.length; i++) {
+      const t = REGISTERED_TEAMS[i];
+      const wp = waypoints[i % waypoints.length];
+      await setDoc(doc(this.db, 'teams', t.teamId), {
+        teamId: t.teamId,
+        teamName: t.teamName,
+        color: t.color,
+        shirtColor: t.shirtColor,
+        flagsCollected: 0,
+        collectedFlagIds: [],
+        collectionTimestamps: {},
+        penaltySeconds: 0,
+        penaltyActiveUntil: 0,
+        startedAt: now,
+        completedAt: null,
+        status: 'IN_PROGRESS',
+        position: { x: wp[0], y: wp[1], z: wp[2], yaw: 0, anim: 'IDLE', zone: 'Spawn' },
+        lastUpdatedAt: now
+      });
     }
   }
 
   subscribeTeam(teamId, cb) {
     if (!this.connected) return () => {};
-    const ref = doc(this.db, 'teams', teamId);
-    return onSnapshot(ref, (snap) => {
+    return onSnapshot(doc(this.db, 'teams', teamId), (snap) => {
       if (snap.exists()) cb(snap.data());
     });
   }
 
   subscribeSpectator(cb) {
     if (!this.connected) return () => {};
-    const colRef = collection(this.db, 'teams');
-    return onSnapshot(colRef, (snap) => {
+    return onSnapshot(collection(this.db, 'teams'), (snap) => {
       const list = [];
       const now = Date.now();
       snap.forEach((d) => {
         const t = d.data();
+        const cfg = REGISTERED_TEAMS.find((r) => r.teamId === t.teamId);
         const endRef = t.completedAt || now;
         const rawSec = Math.max(0, Math.floor((endRef - (t.startedAt || now)) / 1000));
         const effSec = rawSec + (t.penaltySeconds || 0);
         list.push({
           teamId: t.teamId,
-          teamName: t.teamName,
+          teamName: cfg ? cfg.teamName : t.teamName,
           flagsCollected: t.flagsCollected || 0,
           penaltySeconds: t.penaltySeconds || 0,
           status: t.status || 'IN_PROGRESS',
           rawSec,
           effSec,
-          position: t.position || { x: 0, y: 0, z: 12, yaw: 0 }
+          position: t.position || { x: 0, y: 0, z: 12, yaw: 0, anim: 'IDLE', zone: 'Campus' }
         });
       });
       list.sort((a, b) => (b.flagsCollected !== a.flagsCollected)
@@ -126,8 +156,8 @@ class FirebaseGameService {
     });
   }
 
-  async updatePosition(teamId, x, y, z, yaw, anim) {
-    if (!this.connected) return;
+  async updatePosition(teamId, x, y, z, yaw, anim, zone) {
+    if (!this.connected || !teamId) return;
     try {
       await updateDoc(doc(this.db, 'teams', teamId), {
         position: {
@@ -135,7 +165,8 @@ class FirebaseGameService {
           y: Number(y.toFixed(2)),
           z: Number(z.toFixed(2)),
           yaw: Number(yaw.toFixed(2)),
-          anim
+          anim,
+          zone
         },
         lastUpdatedAt: Date.now()
       });
@@ -144,21 +175,15 @@ class FirebaseGameService {
 
   async validateAndCollect(teamId, flagId, rawPin) {
     const pin = typeof rawPin === 'string' ? rawPin.trim() : '';
-    if (!/^\d{4}$/.test(pin)) {
-      return { ok: false, message: 'Enter an exact 4-digit numeric code (e.g., 0047).' };
-    }
-    if (DEV_PINS[flagId] !== pin) {
-      return { ok: false, message: 'Access Denied: Incorrect 4-digit PIN.' };
-    }
+    if (!/^\d{4}$/.test(pin)) return { ok: false, message: 'Enter an exact 4-digit numeric PIN.' };
+    if (DEV_PINS[flagId] !== pin) return { ok: false, message: 'Access Denied: Incorrect 4-digit PIN.' };
     try {
       const ref = doc(this.db, 'teams', teamId);
       const snap = await getDoc(ref);
-      if (!snap.exists()) return { ok: false, message: 'Team record not found.' };
+      if (!snap.exists()) return { ok: false, message: 'Team not found.' };
       const data = snap.data();
       if (data.status === 'COMPLETED') return { ok: false, message: 'Run already locked.' };
-      if (data.collectedFlagIds?.includes(flagId)) {
-        return { ok: false, message: 'Flag already in your backpack.' };
-      }
+      if (data.collectedFlagIds?.includes(flagId)) return { ok: false, message: 'Flag already in backpack.' };
       const now = Date.now();
       const updated = [...(data.collectedFlagIds || []), flagId];
       await updateDoc(ref, {
@@ -176,9 +201,7 @@ class FirebaseGameService {
   async applyDecoy(teamId, decoyFlagId) {
     const now = Date.now();
     const key = `${teamId}:${decoyFlagId}`;
-    if (now - (this.decoyCooldowns.get(key) || 0) < 8000) {
-      return { ok: false, message: 'Decoy cooldown active.' };
-    }
+    if (now - (this.decoyCooldowns.get(key) || 0) < 8000) return { ok: false, message: 'Decoy cooldown active.' };
     this.decoyCooldowns.set(key, now);
     try {
       const ref = doc(this.db, 'teams', teamId);
@@ -193,7 +216,7 @@ class FirebaseGameService {
         penaltyActiveUntil: base + pen * 1000,
         lastUpdatedAt: now
       });
-      return { ok: true, message: `DECOY TRAP! +${pen}s penalty applied to ${data.teamName}.` };
+      return { ok: true, message: `DECOY TRAP! +${pen}s penalty applied.` };
     } catch (e) {
       return { ok: false, message: e.message };
     }
@@ -234,8 +257,7 @@ container.appendChild(renderer.domElement);
 
 const playerCamera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 450);
 
-// Wide Campus Orthographic Spectator Camera
-const orthoSize = 95;
+let orthoSize = 95;
 const aspect = window.innerWidth / window.innerHeight;
 const spectatorCamera = new THREE.OrthographicCamera(
   -orthoSize * aspect, orthoSize * aspect, orthoSize, -orthoSize, 1, 260
@@ -269,21 +291,21 @@ scene.add(sunLight);
 let isDaylight = true;
 function applyLightingPreset(day) {
   scene.background = new THREE.Color(day ? 0x7EC8E3 : 0xE89D54);
-  scene.fog = new THREE.FogExp2(day ? 0x7EC8E3 : 0xE89D54, 0.0022);
+  scene.fog = new THREE.FogExp2(day ? 0x7EC8E3 : 0xE89D54, 0.002);
   sunLight.color.setHex(day ? 0xFFF9E6 : 0xFFD29D);
 }
 applyLightingPreset(true);
 
 // ============================================================================
-// 3. PROCEDURAL TEXTURES (EXACT MATCH TO REFERENCE IMAGE 2)
+// 3. PROCEDURAL TEXTURES & MATERIALS
 // ============================================================================
-function createCreamGridPlasterTexture() {
+function createPlasterTexture(hexColor, gridStroke) {
   const c = document.createElement('canvas');
   c.width = 256; c.height = 256;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = '#F3EFE0';
+  ctx.fillStyle = hexColor;
   ctx.fillRect(0, 0, 256, 256);
-  ctx.strokeStyle = 'rgba(180, 170, 150, 0.28)';
+  ctx.strokeStyle = gridStroke;
   ctx.lineWidth = 2;
   for (let i = 0; i <= 256; i += 32) {
     ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 256); ctx.stroke();
@@ -328,7 +350,7 @@ function createSignTexture(lines, bg = '#1D5B9E') {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   lines.forEach((l, i) => {
-    ctx.font = i === 0 ? 'bold 42px Arial, sans-serif' : 'bold 30px Arial, sans-serif';
+    ctx.font = i === 0 ? 'bold 40px Arial, sans-serif' : 'bold 28px Arial, sans-serif';
     ctx.fillText(l, c.width / 2, c.height / 2 + (i - (lines.length - 1) / 2) * 64);
   });
   return new THREE.CanvasTexture(c);
@@ -338,48 +360,29 @@ function createFootballPitchTexture() {
   const c = document.createElement('canvas');
   c.width = 1024; c.height = 640;
   const ctx = c.getContext('2d');
-
-  // Alternating mown artificial turf stripes
   const stripes = 16;
   const sw = c.width / stripes;
   for (let i = 0; i < stripes; i++) {
     ctx.fillStyle = i % 2 === 0 ? '#2E7D32' : '#388E3C';
     ctx.fillRect(i * sw, 0, sw, c.height);
   }
-
-  // White pitch markings
   ctx.strokeStyle = '#FFFFFF';
   ctx.lineWidth = 8;
   const pad = 40;
-  const pw = c.width - pad * 2;
-  const ph = c.height - pad * 2;
-
-  // Outer touchline & goal lines
-  ctx.strokeRect(pad, pad, pw, ph);
-
-  // Halfway line & Center circle
-  ctx.beginPath();
-  ctx.moveTo(c.width / 2, pad);
-  ctx.lineTo(c.width / 2, c.height - pad);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.arc(c.width / 2, c.height / 2, 78, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // Left & Right Penalty Boxes
+  ctx.strokeRect(pad, pad, c.width - pad * 2, c.height - pad * 2);
+  ctx.beginPath(); ctx.moveTo(c.width / 2, pad); ctx.lineTo(c.width / 2, c.height - pad); ctx.stroke();
+  ctx.beginPath(); ctx.arc(c.width / 2, c.height / 2, 78, 0, Math.PI * 2); ctx.stroke();
   ctx.strokeRect(pad, c.height / 2 - 140, 135, 280);
   ctx.strokeRect(c.width - pad - 135, c.height / 2 - 140, 135, 280);
-
-  // Goal areas
-  ctx.strokeRect(pad, c.height / 2 - 68, 52, 136);
-  ctx.strokeRect(c.width - pad - 52, c.height / 2 - 68, 52, 136);
-
   return new THREE.CanvasTexture(c);
 }
 
 const MAT = {
-  facadeCream: new THREE.MeshStandardMaterial({ map: createCreamGridPlasterTexture(), roughness: 0.8 }),
+  aimlWall: new THREE.MeshStandardMaterial({ map: createPlasterTexture('#F3EFE0', 'rgba(180,170,150,0.28)'), roughness: 0.8 }),
+  crcWall: new THREE.MeshStandardMaterial({ map: createPlasterTexture('#E2E8F0', 'rgba(100,116,139,0.25)'), roughness: 0.5, metalness: 0.15 }),
+  gblWall: new THREE.MeshStandardMaterial({ map: createPlasterTexture('#FDE68A', 'rgba(180,83,9,0.22)'), roughness: 0.85 }),
+  annexWall: new THREE.MeshStandardMaterial({ map: createPlasterTexture('#F1F5F9', 'rgba(13,148,136,0.22)'), roughness: 0.4, metalness: 0.2 }),
+  glassCurtain: new THREE.MeshPhysicalMaterial({ color: 0x38BDF8, transparent: true, opacity: 0.48, roughness: 0.1, metalness: 0.3 }),
   interiorUpper: new THREE.MeshStandardMaterial({ color: PALETTE.interiorUpper, roughness: 0.85 }),
   interiorDado: new THREE.MeshStandardMaterial({ color: PALETTE.interiorDado, roughness: 0.65 }),
   corridorTile: new THREE.MeshStandardMaterial({ map: createTileTexture('#6A524A', '#7A6056', 22, 6), roughness: 0.35 }),
@@ -427,148 +430,52 @@ function addTwoToneWall(w, h, d, x, floorY, z, collide = true, isCutaway = false
 }
 
 // ============================================================================
-// 4. MULTI-BUILDING GENERATOR (MATCHES REFERENCE IMAGE 2 + CRC 3F + GBL 2F)
+// 4. DISTINCT ARCHITECTURAL GENERATOR (AIML vs CRC vs GBL vs ANNEX)
 // ============================================================================
 function buildDepartmentBuilding(bCfg) {
   const ox = bCfg.offsetX;
   const oz = bCfg.offsetZ;
   const numFloors = bCfg.floors;
   const totalH = numFloors * DIM.floorHeight;
-  const zFront = oz + DIM.totalDepth / 2; // +5.8m local
-  const zBack = oz - DIM.totalDepth / 2;  // -5.8m local
+  const zFront = oz + DIM.totalDepth / 2;
+  const zBack = oz - DIM.totalDepth / 2;
   const zPart = oz + 2.6;
 
-  const trimMat = new THREE.MeshStandardMaterial({ color: bCfg.trimColor, roughness: 0.7 });
+  const wallMat = bCfg.archStyle === 'CRC_GLASS_TOWER' ? MAT.crcWall
+    : bCfg.archStyle === 'GBL_HERITAGE' ? MAT.gblWall
+    : bCfg.archStyle === 'ANNEX_PAVILION' ? MAT.annexWall
+    : MAT.aimlWall;
 
-  // 1. Paved Driveway with Trim Curbs leading to the Portico (Matches Reference Image 2)
+  const trimMat = new THREE.MeshStandardMaterial({ color: bCfg.trimColor, roughness: 0.6 });
+
+  // 1. Common Navigable Floor Slabs, Corridors, Stairwells & Rooms
   addBoxMesh(6.4, 0.08, 22, MAT.drivewayTile, ox, 0.02, zFront + 12.0, false);
   addBoxMesh(0.32, 0.14, 22, trimMat, ox - 3.2, 0.05, zFront + 12.0, false);
   addBoxMesh(0.32, 0.14, 22, trimMat, ox + 3.2, 0.05, zFront + 12.0, false);
 
-  // 2. Floor Slabs & Vitrified Corridor Tiles for each floor
-  addBoxMesh(DIM.totalWidth, 0.25, DIM.totalDepth, MAT.facadeCream, ox, -0.125, oz, false);
+  addBoxMesh(DIM.totalWidth, 0.25, DIM.totalDepth, wallMat, ox, -0.125, oz, false);
 
   for (let f = 0; f < numFloors; f++) {
     const fY = f * DIM.floorHeight;
     if (f > 0) {
-      // Left & Right Wing Slabs + Central Corridor Bridge (leaving stairwell open)
-      addBoxMesh(20.0, 0.26, DIM.totalDepth, MAT.facadeCream, ox - 13.0, fY - 0.13, oz, false);
-      addBoxMesh(20.0, 0.26, DIM.totalDepth, MAT.facadeCream, ox + 13.0, fY - 0.13, oz, false);
-      addBoxMesh(6.0, 0.26, 4.0, MAT.facadeCream, ox, fY - 0.13, oz + 3.8, false);
+      addBoxMesh(20.0, 0.26, DIM.totalDepth, wallMat, ox - 13.0, fY - 0.13, oz, false);
+      addBoxMesh(20.0, 0.26, DIM.totalDepth, wallMat, ox + 13.0, fY - 0.13, oz, false);
+      addBoxMesh(6.0, 0.26, 4.0, wallMat, ox, fY - 0.13, oz + 3.8, false);
     }
-
-    // Corridor Tile Overlay
     addBoxMesh(DIM.totalWidth - 0.4, 0.03, DIM.corridorDepth, MAT.corridorTile, ox, fY + 0.015, oz + 4.2, false);
 
-    // Front Parapet Wall
     if (f === 0) {
-      // Ground floor leaves central portico entrance open
-      addBoxMesh(20.4, DIM.parapetHeight, 0.25, MAT.facadeCream, ox - 12.8, fY + DIM.parapetHeight / 2, zFront, true, true);
-      addBoxMesh(20.4, DIM.parapetHeight, 0.25, MAT.facadeCream, ox + 12.8, fY + DIM.parapetHeight / 2, zFront, true, true);
+      addBoxMesh(20.4, DIM.parapetHeight, 0.25, wallMat, ox - 12.8, fY + DIM.parapetHeight / 2, zFront, true, true);
+      addBoxMesh(20.4, DIM.parapetHeight, 0.25, wallMat, ox + 12.8, fY + DIM.parapetHeight / 2, zFront, true, true);
     } else {
-      addBoxMesh(DIM.totalWidth, DIM.parapetHeight, 0.25, MAT.facadeCream, ox, fY + DIM.parapetHeight / 2, zFront, true, true);
+      addBoxMesh(DIM.totalWidth, DIM.parapetHeight, 0.25, wallMat, ox, fY + DIM.parapetHeight / 2, zFront, true, true);
     }
-
-    // Deep Upper Cream Spandrel Wall Band above corridor openings (Critical detail from Reference Image 2!)
-    const spandrelH = f === numFloors - 1 ? 1.55 : 1.35;
-    addBoxMesh(DIM.totalWidth, spandrelH, 0.25, MAT.facadeCream, ox, (f + 1) * DIM.floorHeight - spandrelH / 2, zFront, false, true);
-
-    // Horizontal Trim Bands (Parapet Top Band & Floor Slab Band — Matches Reference Image 2)
-    addBoxMesh(DIM.totalWidth + 0.4, 0.18, 0.12, trimMat, ox, fY + DIM.parapetHeight, zFront + 0.15, false, true);
-    addBoxMesh(DIM.totalWidth + 0.5, 0.22, 0.14, trimMat, ox, (f + 1) * DIM.floorHeight, zFront + 0.16, false, true);
   }
 
   // Roof Slab
-  addBoxMesh(DIM.totalWidth + 0.6, 0.3, DIM.totalDepth + 0.6, MAT.facadeCream, ox, totalH + 0.15, oz, false, false, true);
-  addBoxMesh(DIM.totalWidth + 0.8, 0.26, 0.16, trimMat, ox, totalH + 0.25, zFront + 0.18, false, false, true);
+  addBoxMesh(DIM.totalWidth + 0.6, 0.3, DIM.totalDepth + 0.6, wallMat, ox, totalH + 0.15, oz, false, false, true);
 
-  // 3. Vertical Structural Columns & Intermediate Mullions with Trim Strips (Matches Reference Image 2)
-  [-23.0, -13.0, -3.0, 3.0, 13.0, 23.0].forEach((cx) => {
-    addBoxMesh(0.48, totalH, 0.45, MAT.facadeCream, ox + cx, totalH / 2, zFront - 0.05, true);
-    addBoxMesh(0.24, totalH + 0.3, 0.1, trimMat, ox + cx, totalH / 2, zFront + 0.18, false);
-  });
-
-  // Intermediate Window Mullions (Creates the exact 2-opening-per-bay rhythm in Reference Image 2)
-  [-18.0, -8.0, 8.0, 18.0].forEach((mx) => {
-    addBoxMesh(0.32, totalH, 0.28, MAT.facadeCream, ox + mx, totalH / 2, zFront, false, true);
-    addBoxMesh(0.16, totalH + 0.3, 0.08, trimMat, ox + mx, totalH / 2, zFront + 0.16, false, true);
-  });
-
-  // 4. Top Center Signboard & Lower Right Wing Signboard (Matches Reference Image 2)
-  const mainSign = new THREE.Mesh(
-    new THREE.BoxGeometry(5.8, 1.48, 0.12),
-    new THREE.MeshStandardMaterial({ map: createSignTexture(bCfg.signLines) })
-  );
-  mainSign.position.set(ox, totalH - 0.76, zFront + 0.24);
-  scene.add(mainSign);
-
-  const subSign = new THREE.Mesh(
-    new THREE.BoxGeometry(4.4, 1.15, 0.1),
-    new THREE.MeshStandardMaterial({ map: createSignTexture(bCfg.subSignLines) })
-  );
-  subSign.position.set(ox + 8.0, 2.25, zFront + 0.24);
-  scene.add(subSign);
-
-  // 5. Gabled Entrance Portico with Black Pillars & Pitched Roof Trim (Matches Reference Image 2)
-  const porticoZ = zFront + 2.2;
-  addBoxMesh(6.2, 0.18, 4.6, MAT.corridorTile, ox, 0.09, zFront + 2.1, false);
-  addBoxMesh(0.46, 3.25, 0.46, MAT.porticoPillar, ox - 2.4, 1.62, porticoZ, true);
-  addBoxMesh(0.46, 3.25, 0.46, MAT.porticoPillar, ox + 2.4, 1.62, porticoZ, true);
-
-  // Pitched Gable Roof Slopes
-  const leftSlope = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.18, 4.8), MAT.facadeCream);
-  leftSlope.position.set(ox - 1.55, 3.65, zFront + 2.1);
-  leftSlope.rotation.z = 0.24;
-  leftSlope.castShadow = true;
-  scene.add(leftSlope);
-
-  const rightSlope = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.18, 4.8), MAT.facadeCream);
-  rightSlope.position.set(ox + 1.55, 3.65, zFront + 2.1);
-  rightSlope.rotation.z = -0.24;
-  rightSlope.castShadow = true;
-  scene.add(rightSlope);
-
-  // Red-Oxide Ridge & Eave Trim Strips on Portico Roof
-  const ridgeStrip = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 4.85), trimMat);
-  ridgeStrip.position.set(ox, 4.02, zFront + 2.1);
-  scene.add(ridgeStrip);
-
-  const leftFascia = new THREE.Mesh(new THREE.BoxGeometry(3.65, 0.22, 0.16), trimMat);
-  leftFascia.position.set(ox - 1.55, 3.66, porticoZ + 0.32);
-  leftFascia.rotation.z = 0.24;
-  scene.add(leftFascia);
-
-  const rightFascia = new THREE.Mesh(new THREE.BoxGeometry(3.65, 0.22, 0.16), trimMat);
-  rightFascia.position.set(ox + 1.55, 3.66, porticoZ + 0.32);
-  rightFascia.rotation.z = -0.24;
-  scene.add(rightFascia);
-
-  // Terracotta Pots with Green Bushes flanking the Portico (Matches Reference Image 2)
-  const potMat = new THREE.MeshStandardMaterial({ color: 0xC84B31, roughness: 0.7 });
-  const bushMat = new THREE.MeshStandardMaterial({ color: 0x2E7D32, roughness: 0.8 });
-  [-3.2, -2.5, 2.9, 3.5, 4.8, 6.0].forEach((px) => {
-    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.18, 0.38, 10), potMat);
-    pot.position.set(ox + px, 0.19, zFront + 0.85);
-    scene.add(pot);
-    const bush = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 10), bushMat);
-    bush.position.set(ox + px, 0.48, zFront + 0.85);
-    scene.add(bush);
-  });
-
-  // 6. Rooftop Staircase Penthouse Box & Angled Solar Panel Arrays (Matches Reference Image 2)
-  addBoxMesh(6.2, 2.7, 5.4, MAT.facadeCream, ox, totalH + 1.5, oz - 2.3, false, false, true);
-  if (bCfg.hasSolarPanels) {
-    [-16.5, -11.5, 6.8, 11.8, 16.8].forEach((sx) => {
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.12, 2.3), MAT.solarPanel);
-      panel.position.set(ox + sx, totalH + 0.6, oz + 2.8);
-      panel.rotation.x = 0.28;
-      panel.castShadow = true;
-      scene.add(panel);
-      roofMeshesForSpectator.push(panel);
-    });
-  }
-
-  // 7. Central Switchback Staircase (Connects all floors: Ground -> 1st -> 2nd Floor)
+  // Central Switchback Staircase
   addTwoToneWall(6.0, totalH, 0.25, ox, 0, oz - 5.65, true);
   addTwoToneWall(0.25, totalH, 8.2, ox - 3.0, 0, oz - 1.5, true);
   addTwoToneWall(0.25, totalH, 8.2, ox + 3.0, 0, oz - 1.5, true);
@@ -576,35 +483,19 @@ function buildDepartmentBuilding(bCfg) {
   for (let f = 0; f < numFloors - 1; f++) {
     const baseY = f * DIM.floorHeight;
     const midY = baseY + 2.1;
-
-    // Mid-Landing Slab
     addBoxMesh(5.7, 0.22, 2.2, MAT.lowerGranite, ox, midY - 0.11, oz - 4.4, false);
-
     const stepRise = 2.1 / 10;
     const stepDepth = 4.5 / 10;
     for (let i = 0; i < 10; i++) {
-      // Lower flight (Right side of stairwell X: +0.2 to +2.7)
       addBoxMesh(2.5, stepRise, stepDepth, MAT.lowerGranite, ox + 1.45, baseY + (i + 0.5) * stepRise, oz + 1.2 - (i + 0.5) * stepDepth, false);
-      // Upper flight (Left side of stairwell X: -2.7 to -0.2)
       addBoxMesh(2.5, stepRise, stepDepth, MAT.upperCement, ox - 1.45, midY + (i + 0.5) * stepRise, oz - 3.3 + (i + 0.5) * stepDepth, false);
     }
-
-    // Diagonal Black Handrail Bars
-    const rail1 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 4.9), MAT.railingSteel);
-    rail1.position.set(ox + 0.2, baseY + 1.9, oz - 1.05);
-    rail1.rotation.x = 0.43;
-    scene.add(rail1);
-
-    const rail2 = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 4.9), MAT.railingSteel);
-    rail2.position.set(ox - 0.2, midY + 1.9, oz - 1.05);
-    rail2.rotation.x = -0.43;
-    scene.add(rail2);
   }
 
-  // 8. Outer Walls & Rooms on Every Floor
-  addBoxMesh(DIM.totalWidth, totalH, 0.25, MAT.facadeCream, ox, totalH / 2, zBack, true);
-  addBoxMesh(0.25, totalH, DIM.totalDepth, MAT.facadeCream, ox - DIM.totalWidth / 2, totalH / 2, oz, true);
-  addBoxMesh(0.25, totalH, DIM.totalDepth, MAT.facadeCream, ox + DIM.totalWidth / 2, totalH / 2, oz, true);
+  // Outer Back/Side Walls & Interior Rooms
+  addBoxMesh(DIM.totalWidth, totalH, 0.25, wallMat, ox, totalH / 2, zBack, true);
+  addBoxMesh(0.25, totalH, DIM.totalDepth, wallMat, ox - DIM.totalWidth / 2, totalH / 2, oz, true);
+  addBoxMesh(0.25, totalH, DIM.totalDepth, wallMat, ox + DIM.totalWidth / 2, totalH / 2, oz, true);
 
   for (let f = 0; f < numFloors; f++) {
     const fY = f * DIM.floorHeight;
@@ -623,11 +514,6 @@ function buildDepartmentBuilding(bCfg) {
       if (leftW > 0.1) addTwoToneWall(leftW, DIM.floorHeight - 0.25, 0.24, ox + r.xMin + leftW / 2, fY, zPart, true);
       if (rightW > 0.1) addTwoToneWall(rightW, DIM.floorHeight - 0.25, 0.24, dX + DIM.doorWidth / 2 + rightW / 2, fY, zPart, true);
 
-      // Header above door
-      const headH = (DIM.floorHeight - 0.25) - DIM.doorHeight;
-      addBoxMesh(DIM.doorWidth, headH, 0.24, MAT.interiorUpper, dX, fY + DIM.doorHeight + headH / 2, zPart, false);
-
-      // Hinged Door
       const pivot = new THREE.Group();
       pivot.position.set(dX - DIM.doorWidth / 2, fY, zPart);
       const panel = new THREE.Mesh(new THREE.BoxGeometry(DIM.doorWidth, DIM.doorHeight, 0.06), MAT.woodDoor);
@@ -635,24 +521,9 @@ function buildDepartmentBuilding(bCfg) {
       pivot.add(panel);
       scene.add(pivot);
       pivot.rotation.y = -1.25;
-      interactiveDoors.push({
-        pivot,
-        isOpen: true,
-        pos: new THREE.Vector3(dX, fY + 1.2, zPart),
-        name: `${bCfg.id} ${f}F-${r.suffix}`
-      });
+      interactiveDoors.push({ pivot, isOpen: true, pos: new THREE.Vector3(dX, fY + 1.2, zPart), name: `${bCfg.id} ${f}F-${r.suffix}` });
 
-      // Red Fire Extinguisher on Corridor Wall (Seen in Reference Image 2!)
-      const ext = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.46, 10), MAT.fireRed);
-      ext.position.set(dX + 0.9, fY + 1.35, zPart + 0.18);
-      scene.add(ext);
-
-      // Corridor Shoe Rack & Interior Desks/Blackboard
       addBoxMesh(2.3, 0.78, 0.4, MAT.shoeRackWood, cX + 1.4, fY + 0.44, zPart + 0.35, true);
-      const board = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.45, 0.08), new THREE.MeshStandardMaterial({ color: 0x111827 }));
-      board.position.set(cX, fY + 2.0, zBack + 0.2);
-      scene.add(board);
-
       addBoxMesh(1.3, 0.8, 0.65, MAT.shoeRackWood, cX - 2.6, fY + 0.4, oz - 3.5, true);
       for (let row = 0; row < 2; row++) {
         for (let col = 0; col < 2; col++) {
@@ -662,27 +533,156 @@ function buildDepartmentBuilding(bCfg) {
     });
   }
 
-  // Left-side cluster of 3 spherical dark green trees (Matches Reference Image 2!)
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5C4033, roughness: 0.9 });
-  const crownMat = new THREE.MeshStandardMaterial({ color: 0x2D5A27, roughness: 0.75 });
-  [[-26.5, 4.8, 3.2], [-23.2, 2.2, 3.4], [-25.8, -1.2, 3.0]].forEach(([tx, tz, rad]) => {
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.52, 4.2, 10), trunkMat);
-    trunk.position.set(ox + tx, 2.1, oz + tz);
-    trunk.castShadow = true;
-    scene.add(trunk);
+  // Signboards
+  const mainSign = new THREE.Mesh(
+    new THREE.BoxGeometry(6.2, 1.5, 0.14),
+    new THREE.MeshStandardMaterial({ map: createSignTexture(bCfg.signLines, bCfg.signColor) })
+  );
+  mainSign.position.set(ox, totalH - 0.76, zFront + 0.28);
+  scene.add(mainSign);
 
-    const crown = new THREE.Mesh(new THREE.SphereGeometry(rad, 16, 16), crownMat);
-    crown.position.set(ox + tx, 5.2, oz + tz);
-    crown.castShadow = true;
-    scene.add(crown);
-  });
+  const subSign = new THREE.Mesh(
+    new THREE.BoxGeometry(4.4, 1.15, 0.1),
+    new THREE.MeshStandardMaterial({ map: createSignTexture(bCfg.subSignLines, bCfg.signColor) })
+  );
+  subSign.position.set(ox + 8.0, 2.25, zFront + 0.24);
+  scene.add(subSign);
+
+  // ==========================================================================
+  // DISTINCT ARCHITECTURAL SILHOUETTES & EXTERIORS
+  // ==========================================================================
+  if (bCfg.archStyle === 'AIML_CLASSIC') {
+    for (let f = 0; f < numFloors; f++) {
+      const fY = f * DIM.floorHeight;
+      const spandrelH = f === numFloors - 1 ? 1.55 : 1.35;
+      addBoxMesh(DIM.totalWidth, spandrelH, 0.25, wallMat, ox, (f + 1) * DIM.floorHeight - spandrelH / 2, zFront, false, true);
+      addBoxMesh(DIM.totalWidth + 0.4, 0.18, 0.12, trimMat, ox, fY + DIM.parapetHeight, zFront + 0.15, false, true);
+      addBoxMesh(DIM.totalWidth + 0.5, 0.22, 0.14, trimMat, ox, (f + 1) * DIM.floorHeight, zFront + 0.16, false, true);
+    }
+    [-23.0, -18.0, -13.0, -8.0, -3.0, 3.0, 8.0, 13.0, 18.0, 23.0].forEach((cx) => {
+      addBoxMesh(0.4, totalH, 0.35, wallMat, ox + cx, totalH / 2, zFront, false, true);
+      addBoxMesh(0.22, totalH + 0.3, 0.1, trimMat, ox + cx, totalH / 2, zFront + 0.18, false, true);
+    });
+    const porticoZ = zFront + 2.2;
+    addBoxMesh(6.2, 0.18, 4.6, MAT.corridorTile, ox, 0.09, zFront + 2.1, false);
+    addBoxMesh(0.46, 3.25, 0.46, MAT.porticoPillar, ox - 2.4, 1.62, porticoZ, true);
+    addBoxMesh(0.46, 3.25, 0.46, MAT.porticoPillar, ox + 2.4, 1.62, porticoZ, true);
+    const lSlope = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.18, 4.8), wallMat);
+    lSlope.position.set(ox - 1.55, 3.65, zFront + 2.1); lSlope.rotation.z = 0.24; scene.add(lSlope);
+    const rSlope = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.18, 4.8), wallMat);
+    rSlope.position.set(ox + 1.55, 3.65, zFront + 2.1); rSlope.rotation.z = -0.24; scene.add(rSlope);
+    addBoxMesh(6.2, 2.7, 5.4, wallMat, ox, totalH + 1.5, oz - 2.3, false, false, true);
+    [-16.5, -11.5, 6.8, 11.8, 16.8].forEach((sx) => {
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.12, 2.3), MAT.solarPanel);
+      panel.position.set(ox + sx, totalH + 0.6, oz + 2.8); panel.rotation.x = 0.28;
+      scene.add(panel); roofMeshesForSpectator.push(panel);
+    });
+  } else if (bCfg.archStyle === 'CRC_GLASS_TOWER') {
+    // 3-Floor High-Tech Glass Curtain-Wall Tower + Twin Geodesic Domes
+    const atriumGlass = new THREE.Mesh(new THREE.BoxGeometry(7.8, totalH - 2.5, 0.2), MAT.glassCurtain);
+    atriumGlass.position.set(ox, (totalH + 2.5) / 2, zFront + 0.2);
+    scene.add(atriumGlass);
+    cutawayMeshes.push(atriumGlass);
+
+    const cyanGlow = new THREE.MeshStandardMaterial({ color: 0x38BDF8, emissive: 0x0284C7, emissiveIntensity: 0.75 });
+    [-23, -15, -7, -3.8, 3.8, 7, 15, 23].forEach((cx) => {
+      addBoxMesh(0.65, totalH + 1.0, 0.75, trimMat, ox + cx, (totalH + 1.0) / 2, zFront + 0.15, false);
+    });
+    for (let f = 1; f <= numFloors; f++) {
+      addBoxMesh(DIM.totalWidth + 1.2, 0.4, 0.95, trimMat, ox, f * DIM.floorHeight, zFront + 0.25, false);
+      addBoxMesh(DIM.totalWidth + 1.3, 0.09, 1.0, cyanGlow, ox, f * DIM.floorHeight + 0.22, zFront + 0.25, false);
+    }
+
+    // Cantilevered Steel Entrance Canopy
+    addBoxMesh(9.0, 0.35, 5.8, trimMat, ox, 3.6, zFront + 2.8, false);
+    addBoxMesh(9.1, 0.1, 5.9, cyanGlow, ox, 3.82, zFront + 2.8, false);
+    [-3.6, 3.6].forEach((px) => {
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 3.6, 16), new THREE.MeshStandardMaterial({ color: 0x94A3B8, metalness: 0.85, roughness: 0.2 }));
+      col.position.set(ox + px, 1.8, zFront + 5.0);
+      scene.add(col);
+    });
+
+    // Twin Geodesic Radar Domes on Roof
+    [-8.0, 8.0].forEach((dx) => {
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(2.6, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0xF8FAFC, metalness: 0.3, roughness: 0.4 }));
+      dome.position.set(ox + dx, totalH + 0.3, oz);
+      scene.add(dome);
+      roofMeshesForSpectator.push(dome);
+    });
+  } else if (bCfg.archStyle === 'GBL_HERITAGE') {
+    // Heritage Sandstone & Brick Wing with Arched Colonnade, Hip Roof & Clock Tower Spire
+    const brickMat = new THREE.MeshStandardMaterial({ color: 0x9A3412, roughness: 0.85 });
+    const roofTileMat = new THREE.MeshStandardMaterial({ color: 0xB91C1C, roughness: 0.75 });
+
+    [-23, -18.5, -14, -9.5, -5, 5, 9.5, 14, 18.5, 23].forEach((cx) => {
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, totalH, 12), brickMat);
+      col.position.set(ox + cx, totalH / 2, zFront + 0.15);
+      scene.add(col);
+    });
+    for (let f = 0; f < numFloors; f++) {
+      addBoxMesh(DIM.totalWidth + 0.8, 0.95, 0.5, brickMat, ox, (f + 1) * DIM.floorHeight - 0.5, zFront + 0.18, false, true);
+    }
+
+    // Classical Stepped Porch
+    addBoxMesh(8.2, 0.24, 5.2, brickMat, ox, 0.12, zFront + 2.4, false);
+    [-3.2, -2.1, 2.1, 3.2].forEach((px) => {
+      const col = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.28, 3.8, 12), wallMat);
+      col.position.set(ox + px, 1.9, zFront + 4.4);
+      scene.add(col);
+    });
+    addBoxMesh(8.6, 0.65, 5.4, brickMat, ox, 4.0, zFront + 2.4, false);
+
+    // Pitched Terracotta Hip Roof
+    const frontPitch = new THREE.Mesh(new THREE.BoxGeometry(DIM.totalWidth + 1.8, 0.25, 7.2), roofTileMat);
+    frontPitch.position.set(ox, totalH + 1.6, oz + 2.8);
+    frontPitch.rotation.x = 0.38;
+    scene.add(frontPitch);
+    roofMeshesForSpectator.push(frontPitch);
+
+    const backPitch = new THREE.Mesh(new THREE.BoxGeometry(DIM.totalWidth + 1.8, 0.25, 7.2), roofTileMat);
+    backPitch.position.set(ox, totalH + 1.6, oz - 2.8);
+    backPitch.rotation.x = -0.38;
+    scene.add(backPitch);
+    roofMeshesForSpectator.push(backPitch);
+
+    // Central Clock Tower & Pyramid Spire
+    addBoxMesh(5.6, 4.2, 5.0, wallMat, ox, totalH + 2.2, oz, false, false, true);
+    const spire = new THREE.Mesh(new THREE.ConeGeometry(4.2, 3.2, 4), roofTileMat);
+    spire.position.set(ox, totalH + 5.9, oz);
+    spire.rotation.y = Math.PI / 4;
+    scene.add(spire);
+    roofMeshesForSpectator.push(spire);
+
+    const clockFace = new THREE.Mesh(new THREE.CircleGeometry(1.15, 24), new THREE.MeshBasicMaterial({ color: 0xFFFBEB }));
+    clockFace.position.set(ox, totalH + 2.8, oz + 2.55);
+    scene.add(clockFace);
+    roofMeshesForSpectator.push(clockFace);
+  } else {
+    // ANNEX PAVILION: Sweeping Barrel-Vault Roof & Diagonal Teal Sun-Fins
+    const tealMat = new THREE.MeshStandardMaterial({ color: 0x0D9488, metalness: 0.4, roughness: 0.3 });
+    for (let x = -22; x <= 22; x += 2.2) {
+      if (Math.abs(x) < 3.5) continue;
+      const louver = new THREE.Mesh(new THREE.BoxGeometry(0.18, totalH, 0.55), tealMat);
+      louver.position.set(ox + x, totalH / 2, zFront + 0.2);
+      louver.rotation.y = 0.45;
+      scene.add(louver);
+    }
+    const vault = new THREE.Mesh(
+      new THREE.CylinderGeometry(6.0, 6.0, DIM.totalWidth + 0.8, 24, 1, false, 0, Math.PI),
+      tealMat
+    );
+    vault.rotation.z = Math.PI / 2;
+    vault.scale.set(0.45, 1, 1);
+    vault.position.set(ox, totalH + 0.2, oz);
+    scene.add(vault);
+    roofMeshesForSpectator.push(vault);
+  }
 }
 
 // ============================================================================
-// 5. EXPANDED CAMPUS MAP, ROADS & PESCE FOOTBALL TURF STADIUM
+// 5. EXPANDED CAMPUS MAP & PESCE FOOTBALL TURF STADIUM
 // ============================================================================
-function buildExpandedCampusAndFootballField() {
-  // 1. Huge 450m x 450m Campus Ground Plane
+function buildExpandedCampus() {
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(450, 450),
     new THREE.MeshStandardMaterial({ color: 0x688048, roughness: 0.95 })
@@ -692,24 +692,18 @@ function buildExpandedCampusAndFootballField() {
   ground.receiveShadow = true;
   scene.add(ground);
 
-  // 2. Main East-West Campus Avenue connecting CRC (-66m), AIML (0m), and GBL (+66m)
-  addBoxMesh(210, 0.06, 8.0, MAT.roadAsphalt, 0, 0.0, 29.0, false);
-  // North-South Connector Road to Annex & Football Stadium
+  addBoxMesh(215, 0.06, 8.0, MAT.roadAsphalt, 0, 0.0, 29.0, false);
   addBoxMesh(7.5, 0.06, 75.0, MAT.roadAsphalt, -32.0, 0.0, 52.0, false);
 
-  // 3. Build all 4 Campus Buildings (AIML, CRC 3-Floor, GBL 2-Floor, Annex 2-Floor)
   CAMPUS_BUILDINGS.forEach((bCfg) => buildDepartmentBuilding(bCfg));
 
-  // 4. Build Full-Size PESCE Football Turf Field
   const fx = FOOTBALL_FIELD_CONFIG.centerX;
   const fz = FOOTBALL_FIELD_CONFIG.centerZ;
-  const pLen = FOOTBALL_FIELD_CONFIG.pitchLength; // 76m
-  const pWid = FOOTBALL_FIELD_CONFIG.pitchWidth;  // 48m
+  const pLen = FOOTBALL_FIELD_CONFIG.pitchLength;
+  const pWid = FOOTBALL_FIELD_CONFIG.pitchWidth;
 
-  // Red athletic track border around turf
   addBoxMesh(pLen + 8.0, 0.05, pWid + 8.0, new THREE.MeshStandardMaterial({ color: 0x993322, roughness: 0.85 }), fx, 0.0, fz, false);
 
-  // Artificial Turf Surface with white markings
   const pitchMesh = new THREE.Mesh(
     new THREE.PlaneGeometry(pLen, pWid),
     new THREE.MeshStandardMaterial({ map: createFootballPitchTexture(), roughness: 0.75 })
@@ -719,50 +713,16 @@ function buildExpandedCampusAndFootballField() {
   pitchMesh.receiveShadow = true;
   scene.add(pitchMesh);
 
-  // 3D Goalposts (West & East ends of the pitch)
-  const postMat = new THREE.MeshStandardMaterial({ color: 0xFFFFFF, roughness: 0.2, metalness: 0.3 });
-  const netMat = new THREE.MeshBasicMaterial({ color: 0xE2E8F0, wireframe: true, transparent: true, opacity: 0.45 });
-
+  const postMat = new THREE.MeshStandardMaterial({ color: 0xFFFFFF, roughness: 0.2 });
   [-1, 1].forEach((dir) => {
     const gx = fx + dir * (pLen / 2 - 2.6);
-    // Left & Right Goalposts + Crossbar
     addBoxMesh(0.16, 2.6, 0.16, postMat, gx, 1.3, fz - 3.6, true);
     addBoxMesh(0.16, 2.6, 0.16, postMat, gx, 1.3, fz + 3.6, true);
     addBoxMesh(0.16, 0.16, 7.36, postMat, gx, 2.6, fz, false);
-
-    // Goal Net Cage
-    const net = new THREE.Mesh(new THREE.BoxGeometry(1.8, 2.55, 7.2), netMat);
-    net.position.set(gx + dir * 0.9, 1.28, fz);
-    scene.add(net);
   });
-
-  // 4 Stadium Floodlight Towers at the corners of the Football Field
-  const poleMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.7, roughness: 0.3 });
-  const lampMat = new THREE.MeshStandardMaterial({ color: 0xFFFFFF, emissive: 0xFEF08A, emissiveIntensity: 0.9 });
-  [
-    [fx - pLen / 2 - 3, fz - pWid / 2 - 3],
-    [fx + pLen / 2 + 3, fz - pWid / 2 - 3],
-    [fx - pLen / 2 - 3, fz + pWid / 2 + 3],
-    [fx + pLen / 2 + 3, fz + pWid / 2 + 3]
-  ].forEach(([lx, lz]) => {
-    const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.38, 16, 8), poleMat);
-    tower.position.set(lx, 8.0, lz);
-    tower.castShadow = true;
-    scene.add(tower);
-
-    const head = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.1, 0.4), lampMat);
-    head.position.set(lx, 16.2, lz);
-    head.lookAt(fx, 0, fz);
-    scene.add(head);
-  });
-
-  // Spectator Bleacher Steps along North Sideline of Football Field
-  for (let s = 0; s < 3; s++) {
-    addBoxMesh(36.0, 0.45 * (s + 1), 1.2, MAT.upperCement, fx, 0.225 * (s + 1), fz - pWid / 2 - 5.2 - s * 1.25, true);
-  }
 }
 
-buildExpandedCampusAndFootballField();
+buildExpandedCampus();
 
 // ============================================================================
 // 6. ARTICULATED HUMAN CHARACTER WITH SKELETON & 3D BACKPACK
@@ -860,7 +820,6 @@ class ArticulatedHumanCharacter {
 
       const thigh = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.42, 0.14), this.mat.pants);
       thigh.position.y = -0.21;
-      thigh.castShadow = true;
       hip.add(thigh);
 
       const kn = new THREE.Group();
@@ -1032,40 +991,28 @@ class FlagSystem {
 const flagSystem = new FlagSystem(scene, wallMeshesForOcclusion);
 
 // ============================================================================
-// 8. MULTI-BUILDING STAIRCASE & FLOOR HEIGHTFIELD SOLVER (SUPPORTS 2F & 3F)
+// 8. FLOOR HEIGHTFIELD & ZONE RESOLVER
 // ============================================================================
 function computeCampusHeight(x, z, curY) {
   for (const bCfg of CAMPUS_BUILDINGS) {
     const lx = x - bCfg.offsetX;
     const lz = z - bCfg.offsetZ;
-
-    // Check if inside this building's footprint
     if (Math.abs(lx) <= DIM.totalWidth / 2 + 0.5 && Math.abs(lz) <= DIM.totalDepth / 2 + 0.5) {
       const maxFloorY = (bCfg.floors - 1) * DIM.floorHeight;
-
-      // Inside Central Stairwell Bay (lx: -2.85 to +2.85)
       if (lx >= -2.85 && lx <= 2.85) {
         for (let f = 0; f < bCfg.floors - 1; f++) {
           const baseY = f * DIM.floorHeight;
           const midY = baseY + 2.1;
           const topY = (f + 1) * DIM.floorHeight;
-
-          // Mid-landing
-          if (lz >= -5.6 && lz <= -3.3 && curY >= baseY + 1.0 && curY <= topY - 0.9) {
-            return midY;
-          }
-          // Lower Flight (lx >= 0, lz: -3.3 to +1.2) -> baseY to midY
+          if (lz >= -5.6 && lz <= -3.3 && curY >= baseY + 1.0 && curY <= topY - 0.9) return midY;
           if (lx >= 0.0 && lz >= -3.3 && lz <= 1.2 && curY >= baseY - 0.4 && curY < midY + 0.55) {
             return baseY + THREE.MathUtils.clamp((1.2 - lz) / 4.5, 0, 1) * 2.1;
           }
-          // Upper Flight (lx < 0, lz: -3.3 to +1.2) -> midY to topY
           if (lx < 0.0 && lz >= -3.3 && lz <= 1.2 && curY >= midY - 0.6 && curY <= topY + 0.5) {
             return midY + THREE.MathUtils.clamp((lz + 3.3) / 4.5, 0, 1) * 2.1;
           }
         }
       }
-
-      // Snap to nearest active floor slab inside this building
       let bestFloorY = 0;
       for (let f = 0; f < bCfg.floors; f++) {
         const fY = f * DIM.floorHeight;
@@ -1078,105 +1025,24 @@ function computeCampusHeight(x, z, curY) {
 }
 
 function getCampusZoneLabel(pos) {
-  // Check Football Field
   const fx = FOOTBALL_FIELD_CONFIG.centerX;
   const fz = FOOTBALL_FIELD_CONFIG.centerZ;
-  if (Math.abs(pos.x - fx) <= 42 && Math.abs(pos.z - fz) <= 28) {
-    return '⚽ PESCE Football Turf Stadium';
-  }
+  if (Math.abs(pos.x - fx) <= 42 && Math.abs(pos.z - fz) <= 28) return '⚽ Football Turf';
 
-  // Check Buildings
   for (const bCfg of CAMPUS_BUILDINGS) {
     const lx = pos.x - bCfg.offsetX;
     const lz = pos.z - bCfg.offsetZ;
     if (Math.abs(lx) <= 23.5 && Math.abs(lz) <= 8.5) {
       const fIdx = Math.round(pos.y / DIM.floorHeight);
       const fName = fIdx === 0 ? 'GF' : `${fIdx}F`;
-      if (lz > 5.8) return `${bCfg.id} Entrance Portico`;
+      if (lz > 5.8) return `${bCfg.id} Portico`;
       if (lz > 2.6) return `${bCfg.id} ${fName} Corridor`;
-      if (Math.abs(lx) <= 3.0) return `${bCfg.id} Central Staircase`;
+      if (Math.abs(lx) <= 3.0) return `${bCfg.id} Staircase`;
       const room = LOCAL_FLOOR_ROOMS.find((r) => lx >= r.xMin && lx <= r.xMax);
       if (room) return `${bCfg.id} ${fName}-${room.suffix}`;
     }
   }
-  return 'Campus Quad & Avenue';
-}
-
-// ============================================================================
-// 9. PLAYER & HUD CONTROLLER
-// ============================================================================
-let activeTeamId = REGISTERED_TEAMS[0].teamId;
-let currentTeamState = null;
-
-const player = {
-  pos: new THREE.Vector3(0, 0, 11.5),
-  yaw: 0,
-  pitch: -0.08,
-  speed: 6.2,
-  sprintMultiplier: 1.75,
-  radius: 0.36,
-  thirdPerson: true,
-  spectatorMode: false,
-  orbitMode: false
-};
-
-const playerAvatar = new ArticulatedHumanCharacter({
-  shirtColor: REGISTERED_TEAMS[0].shirtColor,
-  accentColor: REGISTERED_TEAMS[0].color
-});
-scene.add(playerAvatar.root);
-
-function createMarkerSprite(label, hex) {
-  const c = document.createElement('canvas');
-  c.width = 512; c.height = 128;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-  ctx.fillRect(8, 16, 496, 96);
-  ctx.strokeStyle = `#${hex.toString(16).padStart(6, '0')}`;
-  ctx.lineWidth = 8;
-  ctx.strokeRect(8, 16, 496, 96);
-  ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 34px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(label, 256, 64);
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
-  s.position.set(0, 2.35, 0);
-  s.scale.set(3.2, 0.8, 1);
-  return s;
-}
-
-const otherTeamNodes = new Map();
-REGISTERED_TEAMS.forEach((t) => {
-  const char = new ArticulatedHumanCharacter({ shirtColor: t.shirtColor, accentColor: t.color });
-  char.root.add(createMarkerSprite(t.teamName.split('•')[1].trim(), t.color));
-  scene.add(char.root);
-  otherTeamNodes.set(t.teamId, char);
-});
-
-const teamSelEl = document.getElementById('team-selector');
-const flagCountEl = document.getElementById('hud-flag-counter');
-const timerEl = document.getElementById('hud-timer');
-const penaltyEl = document.getElementById('penalty-banner');
-const submitBtn = document.getElementById('btn-submit-run');
-const toastEl = document.getElementById('interaction-toast');
-const feedbackEl = document.getElementById('feedback-banner');
-const connBadgeEl = document.getElementById('conn-badge');
-
-const pinModal = document.getElementById('pin-modal');
-const pinInput = document.getElementById('pin-input-field');
-const pinError = document.getElementById('pin-modal-error');
-const pinSubmitBtn = document.getElementById('btn-pin-submit');
-const invModal = document.getElementById('inventory-modal');
-const submitModal = document.getElementById('submit-modal');
-let activeFlagForPin = null;
-
-function showBanner(text, border = '#38bdf8') {
-  feedbackEl.textContent = text;
-  feedbackEl.style.borderColor = border;
-  feedbackEl.style.opacity = '1';
-  clearTimeout(showBanner._t);
-  showBanner._t = setTimeout(() => { feedbackEl.style.opacity = '0'; }, 3200);
+  return 'Campus Avenue';
 }
 
 function formatSec(s) {
@@ -1185,324 +1051,559 @@ function formatSec(s) {
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
+function createMarkerSprite(label, hex) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+  ctx.fillRect(8, 16, 496, 96);
+  ctx.strokeStyle = `#${hex.toString(16).padStart(6, '0')}`;
+  ctx.lineWidth = 10;
+  ctx.strokeRect(8, 16, 496, 96);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 38px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, 256, 64);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+  s.position.set(0, 2.35, 0);
+  s.scale.set(3.4, 0.85, 1);
+  return s;
+}
+
+const otherTeamNodes = new Map();
 REGISTERED_TEAMS.forEach((t) => {
-  const opt = document.createElement('option');
-  opt.value = t.teamId;
-  opt.textContent = t.teamName;
-  teamSelEl.appendChild(opt);
+  const char = new ArticulatedHumanCharacter({ shirtColor: t.shirtColor, accentColor: t.color });
+  char.root.add(createMarkerSprite(t.teamName, t.color));
+  scene.add(char.root);
+  otherTeamNodes.set(t.teamId, { char, latestData: null });
 });
 
-let unsubTeam = null;
-function bindTeam(teamId) {
-  activeTeamId = teamId;
-  if (unsubTeam) unsubTeam();
+// ============================================================================
+// 9A. SEPARATE ADMIN PAGE LOGIC (GOD-MODE ONLY IN ADMIN.HTML)
+// ============================================================================
+let adminCameraMode = 'TOPDOWN';
+let adminFollowTeamId = null;
 
-  const cfg = REGISTERED_TEAMS.find((t) => t.teamId === teamId);
-  if (cfg) {
-    playerAvatar.mat.shirt.color.setHex(cfg.shirtColor);
-    playerAvatar.mat.packTrim.color.setHex(cfg.color);
-    playerAvatar.mat.packTrim.emissive.setHex(cfg.color);
-  }
+if (IS_ADMIN_PAGE) {
+  flagSystem.setSpectator(true);
+  roofMeshesForSpectator.forEach((m) => { m.visible = false; });
 
-  unsubTeam = gameService.subscribeTeam(teamId, (state) => {
-    currentTeamState = state;
-    flagCountEl.textContent = `🚩 Flags: ${state.flagsCollected || 0} / 5`;
-    submitBtn.style.display = (state.flagsCollected || 0) >= 5 ? 'inline-flex' : 'none';
-    playerAvatar.syncInventory(state.collectedFlagIds || []);
-    flagSystem.syncCollected(state.collectedFlagIds || []);
-  });
-}
-teamSelEl.addEventListener('change', (e) => bindTeam(e.target.value));
-bindTeam(activeTeamId);
+  const adminOverlay = document.getElementById('admin-login-overlay');
+  const adminPassIn = document.getElementById('admin-pass-input');
+  const adminErr = document.getElementById('admin-login-err');
 
-if (gameService.connected) {
-  connBadgeEl.textContent = '⚡ FIREBASE CLOUD (dtth-f2c8e)';
-  connBadgeEl.className = 'pill firebase-connected';
-}
-
-function openPin(meta) {
-  activeFlagForPin = meta;
-  document.getElementById('pin-modal-code').textContent = `${meta.code} • ${meta.roomCode}`;
-  document.getElementById('pin-modal-title').textContent = meta.title;
-  document.getElementById('pin-modal-desc').textContent = meta.clueHint;
-  pinInput.value = '';
-  pinError.textContent = '';
-  pinModal.classList.add('open');
-  setTimeout(() => pinInput.focus(), 30);
-}
-
-pinInput.addEventListener('input', () => {
-  pinInput.value = pinInput.value.replace(/\D/g, '').slice(0, 4);
-});
-
-pinSubmitBtn.addEventListener('click', async () => {
-  if (!activeFlagForPin) return;
-  const res = await gameService.validateAndCollect(activeTeamId, activeFlagForPin.flagId, pinInput.value);
-  if (!res.ok) {
-    pinError.textContent = res.message;
-  } else {
-    pinModal.classList.remove('open');
-    showBanner(res.message, '#10b981');
-  }
-});
-document.getElementById('btn-pin-cancel').addEventListener('click', () => pinModal.classList.remove('open'));
-
-function openInventory() {
-  if (!currentTeamState) return;
-  document.getElementById('inv-team-title').textContent = `${currentTeamState.teamName} (${currentTeamState.flagsCollected || 0}/5)`;
-  const c = document.getElementById('inventory-slots-container');
-  c.innerHTML = '';
-  PUBLIC_FLAG_MANIFEST.filter((f) => f.kind === 'LEGITIMATE').forEach((f, i) => {
-    const col = currentTeamState.collectedFlagIds?.includes(f.flagId);
-    const div = document.createElement('div');
-    div.className = `inv-slot ${col ? 'collected' : ''}`;
-    div.innerHTML = `
-      <div><b>Slot #${i + 1}: ${f.code}</b> — ${f.title} <span style="color:#38bdf8;">(${f.roomCode})</span></div>
-      <div style="color:${col ? '#34d399' : '#64748b'}; font-weight:700;">${col ? '✅ IN BACKPACK' : '🔒 LOCKED'}</div>
-    `;
-    c.appendChild(div);
-  });
-  invModal.classList.add('open');
-}
-document.getElementById('btn-backpack').addEventListener('click', openInventory);
-document.getElementById('btn-inv-close').addEventListener('click', () => invModal.classList.remove('open'));
-
-submitBtn.addEventListener('click', () => {
-  if (!currentTeamState) return;
-  const raw = Math.floor((Date.now() - (currentTeamState.startedAt || Date.now())) / 1000);
-  const pen = currentTeamState.penaltySeconds || 0;
-  document.getElementById('submit-summary-box').innerHTML = `
-    <div><b>Team:</b> ${currentTeamState.teamName}</div>
-    <div><b>Flags:</b> ${currentTeamState.flagsCollected || 0} / 5</div>
-    <div><b>Raw Time:</b> ${formatSec(raw)} | <b>Penalties:</b> +${pen}s</div>
-    <div><b>Final Time:</b> <span style="color:#34d399; font-weight:700;">${formatSec(raw + pen)}</span></div>
-  `;
-  submitModal.classList.add('open');
-});
-document.getElementById('btn-submit-confirm').addEventListener('click', async () => {
-  const res = await gameService.submitRun(activeTeamId);
-  submitModal.classList.remove('open');
-  showBanner(res.message, res.ok ? '#10b981' : '#f43f5e');
-});
-document.getElementById('btn-submit-cancel').addEventListener('click', () => submitModal.classList.remove('open'));
-
-async function interact() {
-  if (pinModal.classList.contains('open') || invModal.classList.contains('open')) return;
-  const f = flagSystem.findInteractable(player.pos);
-  if (f) {
-    if (f.kind === 'DECOY') {
-      const res = await gameService.applyDecoy(activeTeamId, f.flagId);
-      showBanner(res.message, '#f43f5e');
+  function unlockAdmin() {
+    if (adminPassIn.value.trim() === ADMIN_PASSCODE) {
+      sessionStorage.setItem('TECHYON_ADMIN_AUTH', '1');
+      adminOverlay.style.display = 'none';
     } else {
-      openPin(f);
+      adminErr.textContent = 'Invalid organizer passcode (use tachyonadmin).';
     }
-    return;
   }
-  const d = interactiveDoors.find((door) => door.pos.distanceTo(player.pos) < 2.3);
-  if (d) {
-    d.isOpen = !d.isOpen;
-    d.pivot.rotation.y = d.isOpen ? -1.35 : 0;
+
+  if (sessionStorage.getItem('TECHYON_ADMIN_AUTH') === '1') {
+    adminOverlay.style.display = 'none';
   }
+  document.getElementById('btn-admin-unlock').addEventListener('click', unlockAdmin);
+  adminPassIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') unlockAdmin(); });
+
+  const camStatusEl = document.getElementById('admin-cam-status');
+  const btnTopDown = document.getElementById('btn-admin-topdown');
+  const btnFreeOrbit = document.getElementById('btn-admin-freeorbit');
+
+  btnTopDown.addEventListener('click', () => {
+    adminCameraMode = 'TOPDOWN';
+    adminFollowTeamId = null;
+    orbitControls.enabled = false;
+    btnTopDown.classList.add('active');
+    btnFreeOrbit.classList.remove('active');
+    camStatusEl.textContent = '📷 Camera: Top-Down Orthographic God-Mode';
+  });
+
+  btnFreeOrbit.addEventListener('click', () => {
+    adminCameraMode = 'FREE_ORBIT';
+    adminFollowTeamId = null;
+    orbitControls.enabled = true;
+    playerCamera.position.set(0, 45, 75);
+    orbitControls.target.set(0, 2, 10);
+    orbitControls.update();
+    btnFreeOrbit.classList.add('active');
+    btnTopDown.classList.remove('active');
+    camStatusEl.textContent = '📷 Camera: Free 3D Campus Drone';
+  });
+
+  let roofsHidden = true;
+  document.getElementById('btn-admin-roof').addEventListener('click', (e) => {
+    roofsHidden = !roofsHidden;
+    roofMeshesForSpectator.forEach((m) => { m.visible = !roofsHidden; });
+    e.currentTarget.textContent = roofsHidden ? '🏠 Roofs: Hidden (Interior X-Ray)' : '🏠 Roofs: Visible';
+  });
+
+  document.getElementById('btn-admin-reset-all').addEventListener('click', async () => {
+    if (confirm('Reset all 12 teams to 0/5 flags and clear penalties?')) {
+      await gameService.resetAllTeams();
+    }
+  });
+
+  window.addEventListener('wheel', (e) => {
+    if (adminCameraMode === 'TOPDOWN') {
+      orthoSize = THREE.MathUtils.clamp(orthoSize + e.deltaY * 0.04, 25, 135);
+      const asp = window.innerWidth / window.innerHeight;
+      spectatorCamera.left = -orthoSize * asp;
+      spectatorCamera.right = orthoSize * asp;
+      spectatorCamera.top = orthoSize;
+      spectatorCamera.bottom = -orthoSize;
+      spectatorCamera.updateProjectionMatrix();
+    }
+  });
+
+  gameService.subscribeSpectator((list) => {
+    const tb = document.getElementById('spectator-tbody');
+    tb.innerHTML = '';
+    list.forEach((item, idx) => {
+      const node = otherTeamNodes.get(item.teamId);
+      if (node) {
+        node.latestData = item;
+        node.char.root.visible = true;
+        node.char.root.position.set(item.position.x, item.position.y, item.position.z);
+        node.char.root.rotation.y = item.position.yaw || 0;
+      }
+
+      const isFollowing = adminCameraMode === 'FOLLOW_TEAM' && adminFollowTeamId === item.teamId;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td style="color:#38bdf8; font-weight:700;">#${idx + 1}</td>
+        <td style="font-weight:700;">${item.teamName}</td>
+        <td style="color:#a7f3d0;">${item.position.zone || getCampusZoneLabel(item.position)}</td>
+        <td><span style="padding:2px 6px; border-radius:4px; background:rgba(255,255,255,0.08); font-size:10px;">${item.status === 'COMPLETED' ? '🏆 FINISHED' : (item.position.anim || 'IDLE')}</span></td>
+        <td style="color:${item.flagsCollected === 5 ? '#10b981' : '#fff'}; font-weight:700;">${item.flagsCollected}/5</td>
+        <td style="color:${item.penaltySeconds > 0 ? '#f43f5e' : '#94a3b8'};">+${item.penaltySeconds}s</td>
+        <td>${formatSec(item.effSec)}</td>
+        <td><button class="follow-btn ${isFollowing ? 'active' : ''}" data-tid="${item.teamId}">${isFollowing ? '👁️ Following' : 'Follow 3D'}</button></td>
+      `;
+      tb.appendChild(tr);
+    });
+
+    tb.querySelectorAll('.follow-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const tid = btn.dataset.tid;
+        if (adminCameraMode === 'FOLLOW_TEAM' && adminFollowTeamId === tid) {
+          btnTopDown.click();
+        } else {
+          adminCameraMode = 'FOLLOW_TEAM';
+          adminFollowTeamId = tid;
+          orbitControls.enabled = false;
+          btnTopDown.classList.remove('active');
+          btnFreeOrbit.classList.remove('active');
+          const cfg = REGISTERED_TEAMS.find((t) => t.teamId === tid);
+          camStatusEl.textContent = `📷 Following Live: ${cfg ? cfg.teamName : tid}`;
+        }
+      });
+    });
+  });
+
+  const clock = new THREE.Clock();
+  function animateAdmin() {
+    requestAnimationFrame(animateAdmin);
+    const dt = Math.min(clock.getDelta(), 0.1);
+
+    for (const { char, latestData } of otherTeamNodes.values()) {
+      const spd = latestData?.position?.anim === 'WALKING' || latestData?.position?.anim === 'RUNNING' ? 5.5 : 0;
+      char.update(dt, spd);
+    }
+
+    if (adminCameraMode === 'FREE_ORBIT') {
+      orbitControls.update();
+      renderer.render(scene, playerCamera);
+    } else if (adminCameraMode === 'FOLLOW_TEAM' && adminFollowTeamId) {
+      const targetNode = otherTeamNodes.get(adminFollowTeamId);
+      if (targetNode) {
+        const p = targetNode.char.root.position;
+        const yaw = targetNode.char.root.rotation.y;
+        const eye = new THREE.Vector3(p.x, p.y + 1.8, p.z);
+        const back = new THREE.Vector3(Math.sin(yaw) * 4.2, 1.2, Math.cos(yaw) * 4.2);
+        playerCamera.position.lerp(eye.clone().add(back), 0.15);
+        playerCamera.lookAt(p.x, p.y + 1.3, p.z);
+      }
+      renderer.render(scene, playerCamera);
+    } else {
+      renderer.render(scene, spectatorCamera);
+    }
+  }
+  animateAdmin();
 }
 
-function toggleSpectator() {
-  player.spectatorMode = !player.spectatorMode;
-  document.getElementById('btn-spectator').classList.toggle('active', player.spectatorMode);
-  document.getElementById('spectator-panel').style.display = player.spectatorMode ? 'block' : 'none';
-  document.getElementById('player-info-panel').style.display = player.spectatorMode ? 'none' : 'block';
-  roofMeshesForSpectator.forEach((m) => { m.visible = !player.spectatorMode; });
-  flagSystem.setSpectator(player.spectatorMode);
-}
-document.getElementById('btn-spectator').addEventListener('click', toggleSpectator);
+// ============================================================================
+// 9B. PARTICIPANT PAGE LOGIC (TEAM 1..12 LOGIN GATE + GAMEPLAY LOOP)
+// ============================================================================
+if (!IS_ADMIN_PAGE) {
+  let activeTeamId = null;
+  let currentTeamState = null;
 
-gameService.subscribeSpectator((list) => {
-  const tb = document.getElementById('spectator-tbody');
-  tb.innerHTML = '';
-  list.forEach((item, idx) => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td style="color:#38bdf8; font-weight:700;">#${idx + 1}</td>
-      <td>${item.teamName.replace(/^Team \d+ • /, '')}</td>
-      <td style="color:${item.flagsCollected === 5 ? '#10b981' : '#fff'}; font-weight:700;">${item.flagsCollected}/5</td>
-      <td style="color:${item.penaltySeconds > 0 ? '#f43f5e' : '#94a3b8'};">+${item.penaltySeconds}s</td>
-      <td>${item.status === 'COMPLETED' ? `✅ ${formatSec(item.effSec)}` : formatSec(item.effSec)}</td>
+  const player = {
+    pos: new THREE.Vector3(0, 0, 11.5),
+    yaw: 0,
+    pitch: -0.08,
+    speed: 6.2,
+    sprintMultiplier: 1.75,
+    radius: 0.36,
+    thirdPerson: true,
+    orbitMode: false
+  };
+
+  const playerAvatar = new ArticulatedHumanCharacter({
+    shirtColor: REGISTERED_TEAMS[0].shirtColor,
+    accentColor: REGISTERED_TEAMS[0].color
+  });
+  scene.add(playerAvatar.root);
+
+  const loginOverlay = document.getElementById('login-overlay');
+  const loginSelect = document.getElementById('login-team-select');
+  const loginPass = document.getElementById('login-pass-input');
+  const loginErr = document.getElementById('login-error-msg');
+  const lockedBadge = document.getElementById('locked-team-badge');
+
+  REGISTERED_TEAMS.forEach((t) => {
+    const opt = document.createElement('option');
+    opt.value = t.teamId;
+    opt.textContent = t.teamName;
+    loginSelect.appendChild(opt);
+  });
+
+  let unsubTeam = null;
+  function startParticipantSession(teamCfg) {
+    activeTeamId = teamCfg.teamId;
+    sessionStorage.setItem('TECHYON_TEAM_ID', teamCfg.teamId);
+    loginOverlay.style.display = 'none';
+    lockedBadge.textContent = `🛡️ ${teamCfg.teamName}`;
+    lockedBadge.className = 'pill active';
+
+    playerAvatar.mat.shirt.color.setHex(teamCfg.shirtColor);
+    playerAvatar.mat.packTrim.color.setHex(teamCfg.color);
+    playerAvatar.mat.packTrim.emissive.setHex(teamCfg.color);
+
+    if (unsubTeam) unsubTeam();
+    unsubTeam = gameService.subscribeTeam(activeTeamId, (state) => {
+      currentTeamState = state;
+      document.getElementById('hud-flag-counter').textContent = `🚩 Flags: ${state.flagsCollected || 0} / 5`;
+      document.getElementById('btn-submit-run').style.display = (state.flagsCollected || 0) >= 5 ? 'inline-flex' : 'none';
+      playerAvatar.syncInventory(state.collectedFlagIds || []);
+      flagSystem.syncCollected(state.collectedFlagIds || []);
+    });
+  }
+
+  function handleParticipantLogin() {
+    const selectedId = loginSelect.value;
+    const pass = loginPass.value.trim();
+    const teamCfg = REGISTERED_TEAMS.find((t) => t.teamId === selectedId);
+    if (!teamCfg || teamCfg.password !== pass) {
+      loginErr.textContent = 'Incorrect password for this team (e.g., tachyon001 for Team 1).';
+      return;
+    }
+    loginErr.textContent = '';
+    startParticipantSession(teamCfg);
+  }
+
+  document.getElementById('btn-login-submit').addEventListener('click', handleParticipantLogin);
+  loginPass.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleParticipantLogin(); });
+
+  const savedTeamId = sessionStorage.getItem('TECHYON_TEAM_ID');
+  if (savedTeamId) {
+    const found = REGISTERED_TEAMS.find((t) => t.teamId === savedTeamId);
+    if (found) startParticipantSession(found);
+  }
+
+  document.getElementById('btn-logout').addEventListener('click', () => {
+    sessionStorage.removeItem('TECHYON_TEAM_ID');
+    activeTeamId = null;
+    loginPass.value = '';
+    loginOverlay.style.display = 'flex';
+  });
+
+  gameService.subscribeSpectator((list) => {
+    list.forEach((item) => {
+      const node = otherTeamNodes.get(item.teamId);
+      if (node) {
+        if (item.teamId === activeTeamId) {
+          node.char.root.visible = false;
+        } else {
+          node.char.root.visible = true;
+          node.char.root.position.set(item.position.x, item.position.y, item.position.z);
+          node.char.root.rotation.y = item.position.yaw || 0;
+        }
+      }
+    });
+  });
+
+  const connBadgeEl = document.getElementById('conn-badge');
+  if (gameService.connected) {
+    connBadgeEl.textContent = '⚡ FIREBASE CLOUD';
+    connBadgeEl.className = 'pill firebase-connected';
+  }
+
+  const toastEl = document.getElementById('interaction-toast');
+  const feedbackEl = document.getElementById('feedback-banner');
+  const pinModal = document.getElementById('pin-modal');
+  const pinInput = document.getElementById('pin-input-field');
+  const pinError = document.getElementById('pin-modal-error');
+  const pinSubmitBtn = document.getElementById('btn-pin-submit');
+  const invModal = document.getElementById('inventory-modal');
+  const submitModal = document.getElementById('submit-modal');
+  let activeFlagForPin = null;
+
+  function showBanner(text, border = '#38bdf8') {
+    feedbackEl.textContent = text;
+    feedbackEl.style.borderColor = border;
+    feedbackEl.style.opacity = '1';
+    clearTimeout(showBanner._t);
+    showBanner._t = setTimeout(() => { feedbackEl.style.opacity = '0'; }, 3200);
+  }
+
+  function openPin(meta) {
+    activeFlagForPin = meta;
+    document.getElementById('pin-modal-code').textContent = `${meta.code} • ${meta.roomCode}`;
+    document.getElementById('pin-modal-title').textContent = meta.title;
+    document.getElementById('pin-modal-desc').textContent = meta.clueHint;
+    pinInput.value = '';
+    pinError.textContent = '';
+    pinModal.classList.add('open');
+    setTimeout(() => pinInput.focus(), 30);
+  }
+
+  pinInput.addEventListener('input', () => {
+    pinInput.value = pinInput.value.replace(/\D/g, '').slice(0, 4);
+  });
+
+  pinSubmitBtn.addEventListener('click', async () => {
+    if (!activeFlagForPin || !activeTeamId) return;
+    const res = await gameService.validateAndCollect(activeTeamId, activeFlagForPin.flagId, pinInput.value);
+    if (!res.ok) {
+      pinError.textContent = res.message;
+    } else {
+      pinModal.classList.remove('open');
+      showBanner(res.message, '#10b981');
+    }
+  });
+  document.getElementById('btn-pin-cancel').addEventListener('click', () => pinModal.classList.remove('open'));
+
+  function openInventory() {
+    if (!currentTeamState) return;
+    document.getElementById('inv-team-title').textContent = `${currentTeamState.teamName} (${currentTeamState.flagsCollected || 0}/5)`;
+    const c = document.getElementById('inventory-slots-container');
+    c.innerHTML = '';
+    PUBLIC_FLAG_MANIFEST.filter((f) => f.kind === 'LEGITIMATE').forEach((f, i) => {
+      const col = currentTeamState.collectedFlagIds?.includes(f.flagId);
+      const div = document.createElement('div');
+      div.className = `inv-slot ${col ? 'collected' : ''}`;
+      div.innerHTML = `
+        <div><b>Slot #${i + 1}: ${f.code}</b> — ${f.title} <span style="color:#38bdf8;">(${f.roomCode})</span></div>
+        <div style="color:${col ? '#34d399' : '#64748b'}; font-weight:700;">${col ? '✅ IN BACKPACK' : '🔒 LOCKED'}</div>
+      `;
+      c.appendChild(div);
+    });
+    invModal.classList.add('open');
+  }
+  document.getElementById('btn-backpack').addEventListener('click', openInventory);
+  document.getElementById('btn-inv-close').addEventListener('click', () => invModal.classList.remove('open'));
+
+  document.getElementById('btn-submit-run').addEventListener('click', () => {
+    if (!currentTeamState) return;
+    const raw = Math.floor((Date.now() - (currentTeamState.startedAt || Date.now())) / 1000);
+    const pen = currentTeamState.penaltySeconds || 0;
+    document.getElementById('submit-summary-box').innerHTML = `
+      <div><b>Team:</b> ${currentTeamState.teamName}</div>
+      <div><b>Flags:</b> ${currentTeamState.flagsCollected || 0} / 5</div>
+      <div><b>Raw Time:</b> ${formatSec(raw)} | <b>Penalties:</b> +${pen}s</div>
+      <div><b>Final Time:</b> <span style="color:#34d399; font-weight:700;">${formatSec(raw + pen)}</span></div>
     `;
-    tb.appendChild(tr);
+    submitModal.classList.add('open');
+  });
+  document.getElementById('btn-submit-confirm').addEventListener('click', async () => {
+    const res = await gameService.submitRun(activeTeamId);
+    submitModal.classList.remove('open');
+    showBanner(res.message, res.ok ? '#10b981' : '#f43f5e');
+  });
+  document.getElementById('btn-submit-cancel').addEventListener('click', () => submitModal.classList.remove('open'));
 
-    const c = otherTeamNodes.get(item.teamId);
-    if (c) {
-      if (item.teamId === activeTeamId && !player.spectatorMode) {
-        c.root.visible = false;
+  async function interact() {
+    if (!activeTeamId || pinModal.classList.contains('open') || invModal.classList.contains('open')) return;
+    const f = flagSystem.findInteractable(player.pos);
+    if (f) {
+      if (f.kind === 'DECOY') {
+        const res = await gameService.applyDecoy(activeTeamId, f.flagId);
+        showBanner(res.message, '#f43f5e');
       } else {
-        c.root.visible = true;
-        c.root.position.set(item.position.x, item.position.y, item.position.z);
-        c.root.rotation.y = item.position.yaw || 0;
+        openPin(f);
+      }
+      return;
+    }
+    const d = interactiveDoors.find((door) => door.pos.distanceTo(player.pos) < 2.3);
+    if (d) {
+      d.isOpen = !d.isOpen;
+      d.pivot.rotation.y = d.isOpen ? -1.35 : 0;
+    }
+  }
+
+  function teleportToZone(zoneId) {
+    const z = TELEPORT_ZONES[zoneId];
+    if (!z) return;
+    document.querySelectorAll('.zone-btn').forEach((btn) => {
+      btn.classList.toggle('active', Number(btn.dataset.zone) === zoneId);
+    });
+    player.orbitMode = Boolean(z.orbit);
+    orbitControls.enabled = player.orbitMode;
+    if (z.orbit) {
+      playerCamera.position.set(z.pos[0], z.pos[1], z.pos[2]);
+      orbitControls.target.set(z.target[0], z.target[1], z.target[2]);
+      orbitControls.update();
+    } else {
+      player.pos.set(z.pos[0], z.pos[1], z.pos[2]);
+      player.yaw = z.yaw;
+    }
+  }
+
+  document.querySelectorAll('.zone-btn').forEach((btn) => {
+    btn.addEventListener('click', () => teleportToZone(Number(btn.dataset.zone)));
+  });
+
+  const keys = {};
+  window.addEventListener('keydown', (e) => {
+    if (loginOverlay.style.display !== 'none') return;
+    if (e.code === 'Escape') {
+      pinModal.classList.remove('open');
+      invModal.classList.remove('open');
+      submitModal.classList.remove('open');
+    }
+    if (pinModal.classList.contains('open') && e.code === 'Enter') {
+      pinSubmitBtn.click();
+      return;
+    }
+    keys[e.code] = true;
+    if (e.code === 'KeyE') interact();
+    if (e.code === 'KeyI') openInventory();
+    if (e.code === 'KeyV') {
+      player.thirdPerson = !player.thirdPerson;
+      playerAvatar.root.visible = player.thirdPerson;
+      document.getElementById('btn-view-mode').textContent = player.thirdPerson ? '🚶 View: 3rd Person' : '👁️ View: 1st Person';
+    }
+    if (['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8'].includes(e.code)) {
+      teleportToZone(Number(e.code.replace('Digit', '')));
+    }
+  });
+  window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+  let isDrag = false, prevM = { x: 0, y: 0 };
+  renderer.domElement.addEventListener('mousedown', (e) => { isDrag = true; prevM = { x: e.clientX, y: e.clientY }; });
+  window.addEventListener('mouseup', () => { isDrag = false; });
+  window.addEventListener('mousemove', (e) => {
+    if (!isDrag || player.orbitMode) return;
+    player.yaw -= (e.clientX - prevM.x) * 0.0045;
+    player.pitch = THREE.MathUtils.clamp(player.pitch - (e.clientY - prevM.y) * 0.0035, -0.85, 0.85);
+    prevM = { x: e.clientX, y: e.clientY };
+  });
+
+  function checkCollision(nx, nz, y) {
+    const box = new THREE.Box3(
+      new THREE.Vector3(nx - player.radius, y + 0.35, nz - player.radius),
+      new THREE.Vector3(nx + player.radius, y + 1.65, nz + player.radius)
+    );
+    return wallColliders.some((wb) => box.intersectsBox(wb));
+  }
+
+  document.getElementById('btn-cutaway').addEventListener('click', (e) => {
+    const isCut = e.currentTarget.classList.toggle('active');
+    cutawayMeshes.forEach((m) => { m.visible = !isCut; });
+    e.currentTarget.textContent = isCut ? '🏛️ Cutaway: On' : '🏛️ Cutaway: Off';
+  });
+  document.getElementById('btn-lighting').addEventListener('click', (e) => {
+    isDaylight = !isDaylight;
+    applyLightingPreset(isDaylight);
+    e.currentTarget.textContent = isDaylight ? '☀️ Daylight' : '🌅 Golden Hour';
+  });
+  document.getElementById('btn-reset-pos').addEventListener('click', () => teleportToZone(2));
+
+  const clock = new THREE.Clock();
+  let syncTimer = 0;
+
+  function animateParticipant() {
+    requestAnimationFrame(animateParticipant);
+    const dt = Math.min(clock.getDelta(), 0.1);
+    let speed = 0;
+
+    if (player.orbitMode) {
+      orbitControls.update();
+    } else if (activeTeamId && !pinModal.classList.contains('open') && !invModal.classList.contains('open')) {
+      let mf = 0, mr = 0;
+      if (keys['KeyW'] || keys['ArrowUp']) mf += 1;
+      if (keys['KeyS'] || keys['ArrowDown']) mf -= 1;
+      if (keys['KeyD'] || keys['ArrowRight']) mr += 1;
+      if (keys['KeyA'] || keys['ArrowLeft']) mr -= 1;
+
+      const len = Math.hypot(mf, mr);
+      if (len > 0) {
+        mf /= len; mr /= len;
+        speed = player.speed * (keys['ShiftLeft'] || keys['ShiftRight'] ? player.sprintMultiplier : 1.0);
+        const sin = Math.sin(player.yaw);
+        const cos = Math.cos(player.yaw);
+        const dx = (-sin * mf + cos * mr) * speed * dt;
+        const dz = (-cos * mf - sin * mr) * speed * dt;
+        if (!checkCollision(player.pos.x + dx, player.pos.z, player.pos.y)) player.pos.x += dx;
+        if (!checkCollision(player.pos.x, player.pos.z + dz, player.pos.y)) player.pos.z += dz;
+      }
+
+      const tY = computeCampusHeight(player.pos.x, player.pos.z, player.pos.y);
+      player.pos.y = THREE.MathUtils.lerp(player.pos.y, tY, 0.28);
+      playerAvatar.root.position.copy(player.pos);
+      playerAvatar.root.rotation.y = player.yaw;
+
+      const eye = new THREE.Vector3(player.pos.x, player.pos.y + 1.62, player.pos.z);
+      const look = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
+
+      if (player.thirdPerson) {
+        playerCamera.position.copy(eye).add(look.clone().multiplyScalar(-3.4)).add(new THREE.Vector3(0, 0.65, 0));
+        playerCamera.lookAt(eye.clone().add(look.clone().multiplyScalar(4.0)));
+      } else {
+        playerCamera.position.copy(eye);
+        playerCamera.lookAt(eye.clone().add(look));
+      }
+
+      const zoneLabel = getCampusZoneLabel(player.pos);
+      const floorNum = Math.round(player.pos.y / DIM.floorHeight);
+      document.getElementById('elevation-indicator').textContent = `Elev: ${player.pos.y.toFixed(1)}m (${floorNum === 0 ? 'Ground' : `${floorNum}F`})`;
+      document.getElementById('room-indicator').textContent = `Zone: ${zoneLabel}`;
+
+      syncTimer += dt;
+      if (syncTimer >= 0.2) {
+        syncTimer = 0;
+        const animLabel = speed > 7.5 ? 'RUNNING' : speed > 0.2 ? 'WALKING' : 'IDLE';
+        gameService.updatePosition(activeTeamId, player.pos.x, player.pos.y, player.pos.z, player.yaw, animLabel, zoneLabel);
       }
     }
-  });
-});
 
-// Teleport to any of the 8 Campus Zones
-function teleportToZone(zoneId) {
-  const z = TELEPORT_ZONES[zoneId];
-  if (!z) return;
-  document.querySelectorAll('.zone-btn').forEach((btn) => {
-    btn.classList.toggle('active', Number(btn.dataset.zone) === zoneId);
-  });
+    playerAvatar.update(dt, speed);
+    flagSystem.update(dt);
 
-  player.orbitMode = Boolean(z.orbit);
-  orbitControls.enabled = player.orbitMode;
-  if (z.orbit) {
-    playerCamera.position.set(z.pos[0], z.pos[1], z.pos[2]);
-    orbitControls.target.set(z.target[0], z.target[1], z.target[2]);
-    orbitControls.update();
-  } else {
-    player.pos.set(z.pos[0], z.pos[1], z.pos[2]);
-    player.yaw = z.yaw;
-  }
-}
-
-document.querySelectorAll('.zone-btn').forEach((btn) => {
-  btn.addEventListener('click', () => teleportToZone(Number(btn.dataset.zone)));
-});
-
-const keys = {};
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'Escape') {
-    pinModal.classList.remove('open');
-    invModal.classList.remove('open');
-    submitModal.classList.remove('open');
-  }
-  if (pinModal.classList.contains('open') && e.code === 'Enter') {
-    pinSubmitBtn.click();
-    return;
-  }
-  keys[e.code] = true;
-  if (e.code === 'KeyE') interact();
-  if (e.code === 'KeyI') openInventory();
-  if (e.code === 'KeyG') toggleSpectator();
-  if (e.code === 'KeyV') {
-    player.thirdPerson = !player.thirdPerson;
-    playerAvatar.root.visible = player.thirdPerson;
-    document.getElementById('btn-view-mode').textContent = player.thirdPerson ? '🚶 View: 3rd Person' : '👁️ View: 1st Person';
-  }
-  if (['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8'].includes(e.code)) {
-    teleportToZone(Number(e.code.replace('Digit', '')));
-  }
-});
-window.addEventListener('keyup', (e) => { keys[e.code] = false; });
-
-let isDrag = false, prevM = { x: 0, y: 0 };
-renderer.domElement.addEventListener('mousedown', (e) => { isDrag = true; prevM = { x: e.clientX, y: e.clientY }; });
-window.addEventListener('mouseup', () => { isDrag = false; });
-window.addEventListener('mousemove', (e) => {
-  if (!isDrag || player.spectatorMode || player.orbitMode) return;
-  player.yaw -= (e.clientX - prevM.x) * 0.0045;
-  player.pitch = THREE.MathUtils.clamp(player.pitch - (e.clientY - prevM.y) * 0.0035, -0.85, 0.85);
-  prevM = { x: e.clientX, y: e.clientY };
-});
-
-function checkCollision(nx, nz, y) {
-  const box = new THREE.Box3(
-    new THREE.Vector3(nx - player.radius, y + 0.35, nz - player.radius),
-    new THREE.Vector3(nx + player.radius, y + 1.65, nz + player.radius)
-  );
-  return wallColliders.some((wb) => box.intersectsBox(wb));
-}
-
-document.getElementById('btn-cutaway').addEventListener('click', (e) => {
-  const isCut = e.currentTarget.classList.toggle('active');
-  cutawayMeshes.forEach((m) => { m.visible = !isCut; });
-  e.currentTarget.textContent = isCut ? '🏛️ Cutaway: On' : '🏛️ Cutaway: Off';
-});
-document.getElementById('btn-lighting').addEventListener('click', (e) => {
-  isDaylight = !isDaylight;
-  applyLightingPreset(isDaylight);
-  e.currentTarget.textContent = isDaylight ? '☀️ Daylight' : '🌅 Golden Hour';
-});
-document.getElementById('btn-reset-pos').addEventListener('click', () => teleportToZone(2));
-
-// ============================================================================
-// 10. RENDER LOOP
-// ============================================================================
-const clock = new THREE.Clock();
-let syncTimer = 0;
-
-function animate() {
-  requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.1);
-  let speed = 0;
-
-  if (player.orbitMode) {
-    orbitControls.update();
-  } else if (!player.spectatorMode && !pinModal.classList.contains('open') && !invModal.classList.contains('open')) {
-    let mf = 0, mr = 0;
-    if (keys['KeyW'] || keys['ArrowUp']) mf += 1;
-    if (keys['KeyS'] || keys['ArrowDown']) mf -= 1;
-    if (keys['KeyD'] || keys['ArrowRight']) mr += 1;
-    if (keys['KeyA'] || keys['ArrowLeft']) mr -= 1;
-
-    const len = Math.hypot(mf, mr);
-    if (len > 0) {
-      mf /= len; mr /= len;
-      speed = player.speed * (keys['ShiftLeft'] || keys['ShiftRight'] ? player.sprintMultiplier : 1.0);
-      const sin = Math.sin(player.yaw);
-      const cos = Math.cos(player.yaw);
-      const dx = (-sin * mf + cos * mr) * speed * dt;
-      const dz = (-cos * mf - sin * mr) * speed * dt;
-      if (!checkCollision(player.pos.x + dx, player.pos.z, player.pos.y)) player.pos.x += dx;
-      if (!checkCollision(player.pos.x, player.pos.z + dz, player.pos.y)) player.pos.z += dz;
+    if (currentTeamState) {
+      const now = Date.now();
+      const end = currentTeamState.completedAt || now;
+      document.getElementById('hud-timer').textContent = `⏱️ ${formatSec(Math.max(0, Math.floor((end - (currentTeamState.startedAt || now)) / 1000)))}`;
+      const penEl = document.getElementById('penalty-banner');
+      if (currentTeamState.penaltyActiveUntil > now) {
+        penEl.style.display = 'inline-flex';
+        penEl.textContent = `⚠️ DECOY PENALTY: ${Math.ceil((currentTeamState.penaltyActiveUntil - now) / 1000)}s`;
+      } else {
+        penEl.style.display = 'none';
+      }
     }
 
-    const tY = computeCampusHeight(player.pos.x, player.pos.z, player.pos.y);
-    player.pos.y = THREE.MathUtils.lerp(player.pos.y, tY, 0.28);
-    playerAvatar.root.position.copy(player.pos);
-    playerAvatar.root.rotation.y = player.yaw;
+    const nearFlag = flagSystem.findInteractable(player.pos);
+    toastEl.style.opacity = nearFlag ? '1' : '0';
+    if (nearFlag) toastEl.textContent = `⚡ Press [E] to interact with ${nearFlag.code}`;
 
-    const eye = new THREE.Vector3(player.pos.x, player.pos.y + 1.62, player.pos.z);
-    const look = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
-
-    if (player.thirdPerson) {
-      playerCamera.position.copy(eye).add(look.clone().multiplyScalar(-3.4)).add(new THREE.Vector3(0, 0.65, 0));
-      playerCamera.lookAt(eye.clone().add(look.clone().multiplyScalar(4.0)));
-    } else {
-      playerCamera.position.copy(eye);
-      playerCamera.lookAt(eye.clone().add(look));
-    }
-
-    syncTimer += dt;
-    if (syncTimer >= 0.2) {
-      syncTimer = 0;
-      gameService.updatePosition(activeTeamId, player.pos.x, player.pos.y, player.pos.z, player.yaw, speed > 0 ? 'WALK' : 'IDLE');
-    }
+    renderer.render(scene, playerCamera);
   }
-
-  playerAvatar.update(dt, speed);
-  flagSystem.update(dt);
-
-  // Update Zone & Floor HUD
-  const floorNum = Math.round(player.pos.y / DIM.floorHeight);
-  const floorStr = floorNum === 0 ? 'Ground' : floorNum === 1 ? '1st Floor' : '2nd Floor';
-  document.getElementById('elevation-indicator').textContent = `Elev: ${player.pos.y.toFixed(1)}m (${floorStr})`;
-  document.getElementById('room-indicator').textContent = `Zone: ${getCampusZoneLabel(player.pos)}`;
-
-  if (currentTeamState) {
-    const now = Date.now();
-    const end = currentTeamState.completedAt || now;
-    timerEl.textContent = `⏱️ ${formatSec(Math.max(0, Math.floor((end - (currentTeamState.startedAt || now)) / 1000)))}`;
-    if (currentTeamState.penaltyActiveUntil > now) {
-      penaltyEl.style.display = 'inline-flex';
-      penaltyEl.textContent = `⚠️ DECOY PENALTY: ${Math.ceil((currentTeamState.penaltyActiveUntil - now) / 1000)}s`;
-    } else {
-      penaltyEl.style.display = 'none';
-    }
-  }
-
-  const nearFlag = flagSystem.findInteractable(player.pos);
-  toastEl.style.opacity = nearFlag && !player.spectatorMode ? '1' : '0';
-  if (nearFlag) toastEl.textContent = `⚡ Press [E] to interact with ${nearFlag.code}`;
-
-  renderer.render(scene, player.spectatorMode ? spectatorCamera : playerCamera);
+  animateParticipant();
 }
 
 window.addEventListener('resize', () => {
@@ -1516,5 +1617,3 @@ window.addEventListener('resize', () => {
   spectatorCamera.updateProjectionMatrix();
   renderer.setSize(w, h);
 });
-
-animate();
