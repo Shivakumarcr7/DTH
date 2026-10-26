@@ -1,7 +1,19 @@
 // src/main.js
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { initializeApp } from 'firebase/app';
 import {
+  getFirestore,
+  doc,
+  setDoc,
+  getDoc,
+  updateDoc,
+  collection,
+  onSnapshot
+} from 'firebase/firestore';
+
+import {
+  FIREBASE_CONFIG,
   BUILDING_DIMENSIONS as DIM,
   PALETTE,
   ROOM_MANIFEST,
@@ -12,195 +24,182 @@ import {
 } from './config/buildingConfig.js';
 
 // ============================================================================
-// 1. LOCAL MOCK & FIREBASE-READY SERVICE LAYER
+// 1. LIVE FIREBASE FIRESTORE SERVICE LAYER (PROJECT: dtth-f2c8e)
 // ============================================================================
-const STORAGE_KEY = 'TECHYON_TWIN_QUEST_STATE_V1';
-const CHANNEL_NAME = 'techyon_twin_quest_realtime';
-
-// Server-Authoritative 4-digit PINs (Simulates trusted Cloud Function validation)
-const DEV_SERVER_PINS = Object.freeze({
-  'FLAG-01': '0047', // Preserves leading zero
+const DEV_PINS = Object.freeze({
+  'FLAG-01': '0047',
   'FLAG-02': '1962',
   'FLAG-03': '3084',
   'FLAG-04': '7410',
   'FLAG-05': '9526'
 });
 
-function createInitialTeamsState() {
-  const now = Date.now();
-  const teams = {};
-  const waypoints = [
-    [0, 0, 11.5], [-16.0, 0, 4.1], [-8.5, 0, -1.5], [8.2, 0, 4.2],
-    [17.5, 0, -2.0], [-1.4, 2.1, -4.2], [-18.0, 4.2, 4.2], [-9.0, 4.2, -1.8],
-    [7.5, 4.2, 4.2], [16.5, 4.2, -1.4], [0.0, 4.2, 4.0], [-14.0, 0, 4.2]
-  ];
-
-  REGISTERED_TEAMS.forEach((t, idx) => {
-    const wp = waypoints[idx % waypoints.length];
-    teams[t.teamId] = {
-      teamId: t.teamId,
-      teamName: t.teamName,
-      color: t.color,
-      shirtColor: t.shirtColor,
-      flagsCollected: 0,
-      collectedFlagIds: [],
-      collectionTimestamps: {},
-      penaltySeconds: 0,
-      penaltyActiveUntil: 0,
-      startedAt: now,
-      completedAt: null,
-      status: 'IN_PROGRESS',
-      position: { x: wp[0], y: wp[1], z: wp[2], yaw: 0, anim: 'IDLE' },
-      lastUpdatedAt: now
-    };
-  });
-  return { teams, createdAt: now };
-}
-
-class LocalMockGameService {
+class FirebaseGameService {
   constructor() {
+    this.connected = false;
+    this.decoyCooldowns = new Map();
     this.listeners = new Set();
     this.spectatorListeners = new Set();
-    this.decoyCooldowns = new Map();
-    this.pendingLocks = new Set();
 
-    this.channel = typeof BroadcastChannel !== 'undefined'
-      ? new BroadcastChannel(CHANNEL_NAME)
-      : null;
-
-    if (this.channel) {
-      this.channel.onmessage = () => this._notify();
-    }
-    this._initStore();
-  }
-
-  _initStore() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw || !JSON.parse(raw).teams) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(createInitialTeamsState()));
-      }
-    } catch {
-      this.fallback = createInitialTeamsState();
+      this.app = initializeApp(FIREBASE_CONFIG);
+      this.db = getFirestore(this.app);
+      this.connected = true;
+      console.log('Firebase initialized successfully for dtth-f2c8e');
+    } catch (err) {
+      console.warn('Firebase init warning, fallback active:', err);
+      this.connected = false;
     }
+
+    this._ensureTeamsSeeded();
   }
 
-  _read() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? JSON.parse(raw) : (this.fallback || createInitialTeamsState());
-    } catch {
-      return this.fallback || createInitialTeamsState();
-    }
-  }
-
-  _write(data) {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch {
-      this.fallback = data;
-    }
-    if (this.channel) this.channel.postMessage({ ts: Date.now() });
-    this._notify();
-  }
-
-  _notify() {
-    const data = this._read();
-    for (const cb of this.listeners) cb(data);
-    const spec = this._buildSpectator(data);
-    for (const cb of this.spectatorListeners) cb(spec);
-  }
-
-  _buildSpectator(store) {
+  async _ensureTeamsSeeded() {
+    if (!this.connected) return;
     const now = Date.now();
-    const list = Object.values(store.teams).map((t) => {
-      const endRef = t.completedAt || now;
-      const rawSec = Math.max(0, Math.floor((endRef - t.startedAt) / 1000));
-      const effSec = rawSec + (t.penaltySeconds || 0);
-      return {
-        teamId: t.teamId,
-        teamName: t.teamName,
-        flagsCollected: t.flagsCollected,
-        penaltySeconds: t.penaltySeconds,
-        isPenaltyActive: t.penaltyActiveUntil > now,
-        status: t.status,
-        rawSec,
-        effSec,
-        position: { ...t.position }
-      };
-    });
+    const waypoints = [
+      [0, 0, 11.5], [-16.0, 0, 4.1], [-8.5, 0, -1.5], [8.2, 0, 4.2],
+      [17.5, 0, -2.0], [-1.4, 2.1, -4.2], [-18.0, 4.2, 4.2], [-9.0, 4.2, -1.8],
+      [7.5, 4.2, 4.2], [16.5, 4.2, -1.4], [0.0, 4.2, 4.0], [-14.0, 0, 4.2]
+    ];
 
-    list.sort((a, b) => (b.flagsCollected !== a.flagsCollected)
-      ? (b.flagsCollected - a.flagsCollected)
-      : (a.effSec - b.effSec));
-    return list;
+    for (let i = 0; i < REGISTERED_TEAMS.length; i++) {
+      const t = REGISTERED_TEAMS[i];
+      const wp = waypoints[i % waypoints.length];
+      const ref = doc(this.db, 'teams', t.teamId);
+      try {
+        const snap = await getDoc(ref);
+        if (!snap.exists()) {
+          await setDoc(ref, {
+            teamId: t.teamId,
+            teamName: t.teamName,
+            color: t.color,
+            shirtColor: t.shirtColor,
+            flagsCollected: 0,
+            collectedFlagIds: [],
+            collectionTimestamps: {},
+            penaltySeconds: 0,
+            penaltyActiveUntil: 0,
+            startedAt: now,
+            completedAt: null,
+            status: 'IN_PROGRESS',
+            position: { x: wp[0], y: wp[1], z: wp[2], yaw: 0, anim: 'IDLE' },
+            lastUpdatedAt: now
+          });
+        }
+      } catch (e) {
+        console.warn('Could not seed team (check Firestore rules):', e);
+      }
+    }
   }
 
   subscribeTeam(teamId, cb) {
-    const fn = (store) => { if (store.teams[teamId]) cb(structuredClone(store.teams[teamId])); };
-    this.listeners.add(fn);
-    fn(this._read());
-    return () => this.listeners.delete(fn);
+    if (this.connected) {
+      const ref = doc(this.db, 'teams', teamId);
+      return onSnapshot(ref, (snap) => {
+        if (snap.exists()) {
+          cb(snap.data());
+        }
+      }, (err) => console.warn('Team snapshot error:', err));
+    }
+    return () => {};
   }
 
   subscribeSpectator(cb) {
-    this.spectatorListeners.add(cb);
-    cb(this._buildSpectator(this._read()));
-    return () => this.spectatorListeners.delete(cb);
+    if (this.connected) {
+      const colRef = collection(this.db, 'teams');
+      return onSnapshot(colRef, (snap) => {
+        const list = [];
+        const now = Date.now();
+        snap.forEach((d) => {
+          const t = d.data();
+          const endRef = t.completedAt || now;
+          const rawSec = Math.max(0, Math.floor((endRef - t.startedAt) / 1000));
+          const effSec = rawSec + (t.penaltySeconds || 0);
+          list.push({
+            teamId: t.teamId,
+            teamName: t.teamName,
+            flagsCollected: t.flagsCollected || 0,
+            penaltySeconds: t.penaltySeconds || 0,
+            isPenaltyActive: t.penaltyActiveUntil > now,
+            status: t.status || 'IN_PROGRESS',
+            rawSec,
+            effSec,
+            position: t.position || { x: 0, y: 0, z: 10, yaw: 0 }
+          });
+        });
+
+        list.sort((a, b) => (b.flagsCollected !== a.flagsCollected)
+          ? (b.flagsCollected - a.flagsCollected)
+          : (a.effSec - b.effSec));
+        cb(list);
+      }, (err) => console.warn('Spectator collection error:', err));
+    }
+    return () => {};
   }
 
-  updatePosition(teamId, x, y, z, yaw, anim) {
-    const store = this._read();
-    if (!store.teams[teamId]) return;
-    store.teams[teamId].position = {
-      x: Number(x.toFixed(2)),
-      y: Number(y.toFixed(2)),
-      z: Number(z.toFixed(2)),
-      yaw: Number(yaw.toFixed(2)),
-      anim
-    };
-    store.teams[teamId].lastUpdatedAt = Date.now();
-    this._write(store);
+  async updatePosition(teamId, x, y, z, yaw, anim) {
+    if (!this.connected) return;
+    try {
+      const ref = doc(this.db, 'teams', teamId);
+      await updateDoc(ref, {
+        position: {
+          x: Number(x.toFixed(2)),
+          y: Number(y.toFixed(2)),
+          z: Number(z.toFixed(2)),
+          yaw: Number(yaw.toFixed(2)),
+          anim
+        },
+        lastUpdatedAt: Date.now()
+      });
+    } catch {
+      // Degrade gracefully on high frequency
+    }
   }
 
   async validateAndCollect(teamId, flagId, rawPin) {
-    const lock = `${teamId}:${flagId}`;
-    if (this.pendingLocks.has(lock)) return { ok: false, message: 'Request in progress...' };
-    this.pendingLocks.add(lock);
+    const pin = typeof rawPin === 'string' ? rawPin.trim() : '';
+    if (!/^\d{4}$/.test(pin)) {
+      return { ok: false, message: 'Enter an exact 4-digit numeric code (e.g., 0047).' };
+    }
+
+    if (DEV_PINS[flagId] !== pin) {
+      return { ok: false, message: 'Access Denied: Incorrect 4-digit PIN.' };
+    }
+
+    if (!this.connected) {
+      return { ok: false, message: 'Firebase offline.' };
+    }
 
     try {
-      await new Promise((r) => setTimeout(r, 160));
-      const pin = typeof rawPin === 'string' ? rawPin.trim() : '';
-      if (!/^\d{4}$/.test(pin)) {
-        return { ok: false, message: 'Enter an exact 4-digit numeric code (e.g., 0047).' };
-      }
+      const ref = doc(this.db, 'teams', teamId);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) return { ok: false, message: 'Team record not found.' };
 
-      const store = this._read();
-      const team = store.teams[teamId];
-      if (!team) return { ok: false, message: 'Team not found.' };
-      if (team.status === 'COMPLETED') return { ok: false, message: 'Run already completed.' };
-
-      if (team.collectedFlagIds.includes(flagId)) {
+      const data = snap.data();
+      if (data.status === 'COMPLETED') return { ok: false, message: 'Run already completed.' };
+      if (data.collectedFlagIds?.includes(flagId)) {
         return { ok: false, message: 'Flag already collected in your backpack.' };
       }
 
-      if (DEV_SERVER_PINS[flagId] !== pin) {
-        return { ok: false, message: 'Access Denied: Incorrect 4-digit PIN.' };
-      }
-
       const now = Date.now();
-      team.collectedFlagIds.push(flagId);
-      team.flagsCollected = team.collectedFlagIds.length;
-      team.collectionTimestamps[flagId] = now;
-      this._write(store);
+      const updatedList = [...(data.collectedFlagIds || []), flagId];
+      const updatedTimestamps = { ...(data.collectionTimestamps || {}), [flagId]: now };
+
+      await updateDoc(ref, {
+        collectedFlagIds: updatedList,
+        flagsCollected: updatedList.length,
+        collectionTimestamps: updatedTimestamps,
+        lastUpdatedAt: now
+      });
 
       return {
         ok: true,
-        flagsCollected: team.flagsCollected,
-        message: `Unlocked! Flag added to backpack (#${team.flagsCollected}/5).`
+        flagsCollected: updatedList.length,
+        message: `Unlocked! Flag added to backpack (#${updatedList.length}/5).`
       };
-    } finally {
-      this.pendingLocks.delete(lock);
+    } catch (e) {
+      return { ok: false, message: `Cloud error: ${e.message}` };
     }
   }
 
@@ -212,44 +211,64 @@ class LocalMockGameService {
     }
     this.decoyCooldowns.set(coolKey, now);
 
-    const store = this._read();
-    const team = store.teams[teamId];
-    if (!team || team.status === 'COMPLETED') return { ok: false, message: 'Inactive.' };
+    if (!this.connected) return { ok: false, message: 'Offline.' };
 
-    const pen = QUEST_RULES.decoyPenaltySeconds;
-    team.penaltySeconds = (team.penaltySeconds || 0) + pen;
-    const base = Math.max(now, team.penaltyActiveUntil || 0);
-    team.penaltyActiveUntil = base + pen * 1000;
-    this._write(store);
+    try {
+      const ref = doc(this.db, 'teams', teamId);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) return { ok: false, message: 'Team not found.' };
+      const data = snap.data();
+      if (data.status === 'COMPLETED') return { ok: false, message: 'Inactive.' };
 
-    return {
-      ok: true,
-      message: `DECOY TRAP! +${pen}s penalty applied to ${team.teamName}.`
-    };
+      const pen = QUEST_RULES.decoyPenaltySeconds;
+      const totalPen = (data.penaltySeconds || 0) + pen;
+      const base = Math.max(now, data.penaltyActiveUntil || 0);
+      const activeUntil = base + pen * 1000;
+
+      await updateDoc(ref, {
+        penaltySeconds: totalPen,
+        penaltyActiveUntil: activeUntil,
+        lastUpdatedAt: now
+      });
+
+      return { ok: true, message: `DECOY TRAP! +${pen}s penalty applied to ${data.teamName}.` };
+    } catch (e) {
+      return { ok: false, message: e.message };
+    }
   }
 
   async submitRun(teamId) {
-    const store = this._read();
-    const team = store.teams[teamId];
-    if (!team) return { ok: false, message: 'Team not found.' };
-    if (team.status === 'COMPLETED') {
-      return { ok: true, message: 'Run was already completed and locked.' };
-    }
-    if (team.flagsCollected < QUEST_RULES.totalLegitimateFlags) {
-      return { ok: false, message: `Collect all 5 flags first (${team.flagsCollected}/5).` };
-    }
+    if (!this.connected) return { ok: false, message: 'Offline.' };
+    try {
+      const ref = doc(this.db, 'teams', teamId);
+      const snap = await getDoc(ref);
+      if (!snap.exists()) return { ok: false, message: 'Team not found.' };
+      const data = snap.data();
 
-    team.completedAt = Date.now();
-    team.status = 'COMPLETED';
-    this._write(store);
-    return { ok: true, message: 'Congratulations! 5/5 flags verified and completion locked.' };
+      if (data.status === 'COMPLETED') {
+        return { ok: true, message: 'Run was already completed and locked.' };
+      }
+      if ((data.flagsCollected || 0) < QUEST_RULES.totalLegitimateFlags) {
+        return { ok: false, message: `Collect all 5 flags first (${data.flagsCollected}/5).` };
+      }
+
+      await updateDoc(ref, {
+        completedAt: Date.now(),
+        status: 'COMPLETED',
+        lastUpdatedAt: Date.now()
+      });
+
+      return { ok: true, message: 'Congratulations! 5/5 flags verified and completion locked.' };
+    } catch (e) {
+      return { ok: false, message: e.message };
+    }
   }
 }
 
-const gameService = new LocalMockGameService();
+const gameService = new FirebaseGameService();
 
 // ============================================================================
-// 2. SCENE, RENDERER, DUAL CAMERAS & ENVIRONMENT
+// 2. 3D SCENE, DUAL CAMERAS & ENVIRONMENT
 // ============================================================================
 const container = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
@@ -305,7 +324,7 @@ function applyLightingPreset(golden) {
 applyLightingPreset(true);
 
 // ============================================================================
-// 3. PROCEDURAL TEXTURES & PRESERVED BUILDING GEOMETRY
+// 3. TEXTURES & PRESERVED 2-FLOOR 8-ROOM ARCHITECTURE
 // ============================================================================
 function createTileTexture(baseHex, tileHex, repsX, repsY) {
   const c = document.createElement('canvas');
@@ -354,10 +373,8 @@ const MAT = {
   roomTile: new THREE.MeshStandardMaterial({ map: createTileTexture('#C5C2BA', '#E2E0D8', 5, 4), roughness: 0.3 }),
   lowerGranite: new THREE.MeshStandardMaterial({ color: PALETTE.lowerStairGranite, roughness: 0.25 }),
   upperCement: new THREE.MeshStandardMaterial({ color: PALETTE.upperStairCement, roughness: 0.6 }),
-  railingSteel: new THREE.MeshStandardMaterial({ color: PALETTE.railingSteel, roughness: 0.4, metalness: 0.7 }),
   woodDoor: new THREE.MeshStandardMaterial({ color: PALETTE.woodDoor, roughness: 0.5 }),
-  shoeRackWood: new THREE.MeshStandardMaterial({ color: PALETTE.shoeRackWood, roughness: 0.4 }),
-  copingWhite: new THREE.MeshStandardMaterial({ color: 0xF8FAFC, roughness: 0.5 })
+  shoeRackWood: new THREE.MeshStandardMaterial({ color: PALETTE.shoeRackWood, roughness: 0.4 })
 };
 
 const wallColliders = [];
@@ -391,16 +408,13 @@ function addTwoToneWall(w, h, d, x, floorY, z, collide = true, isCutaway = false
 }
 
 function buildBuilding() {
-  // Ground plane
   const g = new THREE.Mesh(new THREE.PlaneGeometry(180, 180), new THREE.MeshStandardMaterial({ color: 0x748B54 }));
   g.rotation.x = -Math.PI / 2;
   g.receiveShadow = true;
   scene.add(g);
 
-  // Approach driveway
   addBoxMesh(6.5, 0.08, 22, new THREE.MeshStandardMaterial({ color: 0xEDE9E0 }), 0, 0, 16.5, false);
 
-  // Slabs & Corridors
   addBoxMesh(DIM.totalWidth, 0.25, DIM.totalDepth, MAT.facadeCream, 0, -0.125, 0, false);
   addBoxMesh(20.0, 0.26, DIM.totalDepth, MAT.facadeCream, -13.0, DIM.floorHeight - 0.13, 0, false);
   addBoxMesh(20.0, 0.26, DIM.totalDepth, MAT.facadeCream, 13.0, DIM.floorHeight - 0.13, 0, false);
@@ -409,7 +423,6 @@ function buildBuilding() {
   addBoxMesh(DIM.totalWidth - 0.4, 0.03, DIM.corridorDepth, MAT.corridorTile, 0, DIM.floorHeight + 0.015, 4.2, false);
   addBoxMesh(DIM.totalWidth + 0.6, 0.3, DIM.totalDepth + 0.6, MAT.facadeCream, 0, DIM.floorHeight * 2 + 0.15, 0, false, false, true);
 
-  // Front Parapets & Terracotta bands
   const zF = DIM.totalDepth / 2;
   addBoxMesh(20.4, DIM.parapetHeight, 0.25, MAT.facadeCream, -12.8, DIM.parapetHeight / 2, zF, true, true);
   addBoxMesh(20.4, DIM.parapetHeight, 0.25, MAT.facadeCream, 12.8, DIM.parapetHeight / 2, zF, true, true);
@@ -420,7 +433,6 @@ function buildBuilding() {
     addBoxMesh(0.24, DIM.floorHeight * 2 + 0.4, 0.08, MAT.terracotta, cx, DIM.floorHeight, zF + 0.18, false);
   });
 
-  // Department Signboard
   const sign = new THREE.Mesh(
     new THREE.BoxGeometry(5.8, 1.55, 0.12),
     new THREE.MeshStandardMaterial({
@@ -430,12 +442,11 @@ function buildBuilding() {
   sign.position.set(0, DIM.floorHeight * 2 - 0.78, zF + 0.22);
   scene.add(sign);
 
-  // Entrance Portico
   addBoxMesh(6.2, 0.16, 4.6, MAT.corridorTile, 0, 0.08, zF + 2.1, false);
   addBoxMesh(0.45, 3.2, 0.45, MAT.facadeCream, -2.4, 1.6, zF + 2.2, true);
   addBoxMesh(0.45, 3.2, 0.45, MAT.facadeCream, 2.4, 1.6, zF + 2.2, true);
 
-  // Central Switchback Staircase
+  // Switchback Stairs
   addTwoToneWall(6.0, DIM.floorHeight * 2, 0.25, 0, 0, -5.65, true);
   addTwoToneWall(0.25, DIM.floorHeight * 2, 8.2, -3.0, 0, -1.5, true);
   addTwoToneWall(0.25, DIM.floorHeight * 2, 8.2, 3.0, 0, -1.5, true);
@@ -448,7 +459,7 @@ function buildBuilding() {
     addBoxMesh(2.5, stepRise, stepDepth, MAT.upperCement, -1.45, 2.1 + (i + 0.5) * stepRise, -3.3 + (i + 0.5) * stepDepth, false);
   }
 
-  // 8 Rooms (Outer walls, partitions, doors, shoe racks, desks)
+  // 8 Rooms
   const zBack = -DIM.totalDepth / 2;
   const zPart = 2.6;
   addBoxMesh(DIM.totalWidth, DIM.floorHeight * 2, 0.25, MAT.facadeCream, 0, DIM.floorHeight, zBack, true);
@@ -470,7 +481,6 @@ function buildBuilding() {
     if (leftW > 0.1) addTwoToneWall(leftW, DIM.floorHeight - 0.25, 0.24, r.xMin + leftW / 2, fY, zPart, true);
     if (rightW > 0.1) addTwoToneWall(rightW, DIM.floorHeight - 0.25, 0.24, r.doorX + DIM.doorWidth / 2 + rightW / 2, fY, zPart, true);
 
-    // Hinged Door
     const pivot = new THREE.Group();
     pivot.position.set(r.doorX - DIM.doorWidth / 2, fY, zPart);
     const panel = new THREE.Mesh(new THREE.BoxGeometry(DIM.doorWidth, DIM.doorHeight, 0.06), MAT.woodDoor);
@@ -480,7 +490,6 @@ function buildBuilding() {
     pivot.rotation.y = -1.25;
     interactiveDoors.push({ pivot, isOpen: true, pos: new THREE.Vector3(r.doorX, fY + 1.2, zPart), name: r.name });
 
-    // Corridor Shoe Racks & Room Furnishings
     addBoxMesh(2.4, 0.78, 0.42, MAT.shoeRackWood, cX + 1.4, fY + 0.44, zPart + 0.35, true);
     addBoxMesh(1.3, 0.8, 0.65, MAT.shoeRackWood, cX - 2.6, fY + 0.4, -3.5, true);
     for (let row = 0; row < 2; row++) {
@@ -539,7 +548,6 @@ class ArticulatedHumanCharacter {
     torso.castShadow = true;
     this.joints.spine.add(torso);
 
-    // Head, Eyes & Face
     this.joints.head = new THREE.Group();
     this.joints.head.position.y = 0.54;
     this.joints.spine.add(this.joints.head);
@@ -559,7 +567,6 @@ class ArticulatedHumanCharacter {
       this.joints.head.add(eye);
     });
 
-    // Arms
     ['Left', 'Right'].forEach((side) => {
       const sX = side === 'Left' ? -0.24 : 0.24;
       const sh = new THREE.Group();
@@ -581,7 +588,6 @@ class ArticulatedHumanCharacter {
       el.add(lower);
     });
 
-    // Legs
     ['Left', 'Right'].forEach((side) => {
       const hX = side === 'Left' ? -0.1 : 0.1;
       const hip = new THREE.Group();
@@ -621,7 +627,6 @@ class ArticulatedHumanCharacter {
     led.position.set(0, 0.12, 0.085);
     pack.add(led);
 
-    // 5 Physical Flag Holster Slots on Backpack
     for (let i = 0; i < 5; i++) {
       const slotX = (i - 2) * 0.06;
       const miniFlag = new THREE.Group();
@@ -651,7 +656,7 @@ class ArticulatedHumanCharacter {
     });
   }
 
-  update(dt, speed, onStairs) {
+  update(dt, speed) {
     this.animClock += dt;
     const isMoving = speed > 0.2;
     const targetW = isMoving ? (speed > 6.5 ? 1.3 : 0.85) : 0;
@@ -662,7 +667,6 @@ class ArticulatedHumanCharacter {
     const sin = Math.sin(p);
     const w = this.blendWeight;
 
-    // Breathing & Locomotion
     this.joints.spine.rotation.x = Math.sin(this.animClock * 2.2) * 0.02 + w * 0.08;
     this.pelvis.position.y = 0.94 + Math.abs(Math.cos(p)) * 0.04 * w;
 
@@ -677,7 +681,7 @@ class ArticulatedHumanCharacter {
 }
 
 // ============================================================================
-// 5. GLOWING FLAGS & DECOYS SYSTEM
+// 5. FLAGS & DECOYS SYSTEM
 // ============================================================================
 class FlagSystem {
   constructor(scene, wallMeshes) {
@@ -765,7 +769,7 @@ class FlagSystem {
 const flagSystem = new FlagSystem(scene, wallMeshesForOcclusion);
 
 // ============================================================================
-// 6. ACTIVE PLAYER, CAMERA LOOP & SPECTATOR TEAMS
+// 6. PLAYER, MULTI-TEAM MARKERS & CONTROLLER
 // ============================================================================
 let activeTeamId = REGISTERED_TEAMS[0].teamId;
 let currentTeamState = null;
@@ -788,7 +792,6 @@ const playerAvatar = new ArticulatedHumanCharacter({
 });
 scene.add(playerAvatar.root);
 
-// Spectator Marker Sprite
 function createMarkerSprite(label, hex) {
   const c = document.createElement('canvas');
   c.width = 512; c.height = 128;
@@ -818,7 +821,7 @@ REGISTERED_TEAMS.forEach((t) => {
 });
 
 // ============================================================================
-// 7. HUD, MODALS & INPUT HANDLERS
+// 7. HUD, MODALS & EVENT HANDLERS
 // ============================================================================
 const teamSelEl = document.getElementById('team-selector');
 const flagCountEl = document.getElementById('hud-flag-counter');
@@ -827,6 +830,7 @@ const penaltyEl = document.getElementById('penalty-banner');
 const submitBtn = document.getElementById('btn-submit-run');
 const toastEl = document.getElementById('interaction-toast');
 const feedbackEl = document.getElementById('feedback-banner');
+const connBadgeEl = document.getElementById('conn-badge');
 
 const pinModal = document.getElementById('pin-modal');
 const pinInput = document.getElementById('pin-input-field');
@@ -861,6 +865,7 @@ let unsubTeam = null;
 function bindTeam(teamId) {
   activeTeamId = teamId;
   if (unsubTeam) unsubTeam();
+
   const cfg = REGISTERED_TEAMS.find((t) => t.teamId === teamId);
   if (cfg) {
     playerAvatar.mat.shirt.color.setHex(cfg.shirtColor);
@@ -870,14 +875,19 @@ function bindTeam(teamId) {
 
   unsubTeam = gameService.subscribeTeam(teamId, (state) => {
     currentTeamState = state;
-    flagCountEl.textContent = `🚩 Flags: ${state.flagsCollected} / 5`;
-    submitBtn.style.display = state.flagsCollected >= 5 ? 'inline-flex' : 'none';
-    playerAvatar.syncInventory(state.collectedFlagIds);
-    flagSystem.syncCollected(state.collectedFlagIds);
+    flagCountEl.textContent = `🚩 Flags: ${state.flagsCollected || 0} / 5`;
+    submitBtn.style.display = (state.flagsCollected || 0) >= 5 ? 'inline-flex' : 'none';
+    playerAvatar.syncInventory(state.collectedFlagIds || []);
+    flagSystem.syncCollected(state.collectedFlagIds || []);
   });
 }
 teamSelEl.addEventListener('change', (e) => bindTeam(e.target.value));
 bindTeam(activeTeamId);
+
+if (gameService.connected) {
+  connBadgeEl.textContent = '⚡ FIREBASE CLOUD (dtth-f2c8e)';
+  connBadgeEl.className = 'pill firebase-connected';
+}
 
 // PIN Modal
 function openPin(meta) {
@@ -910,11 +920,11 @@ document.getElementById('btn-pin-cancel').addEventListener('click', () => pinMod
 // Inventory Modal
 function openInventory() {
   if (!currentTeamState) return;
-  document.getElementById('inv-team-title').textContent = `${currentTeamState.teamName} (${currentTeamState.flagsCollected}/5)`;
+  document.getElementById('inv-team-title').textContent = `${currentTeamState.teamName} (${currentTeamState.flagsCollected || 0}/5)`;
   const c = document.getElementById('inventory-slots-container');
   c.innerHTML = '';
   PUBLIC_FLAG_MANIFEST.filter((f) => f.kind === 'LEGITIMATE').forEach((f, i) => {
-    const col = currentTeamState.collectedFlagIds.includes(f.flagId);
+    const col = currentTeamState.collectedFlagIds?.includes(f.flagId);
     const div = document.createElement('div');
     div.className = `inv-slot ${col ? 'collected' : ''}`;
     div.innerHTML = `
@@ -931,11 +941,11 @@ document.getElementById('btn-inv-close').addEventListener('click', () => invModa
 // Submit Run Modal
 submitBtn.addEventListener('click', () => {
   if (!currentTeamState) return;
-  const raw = Math.floor((Date.now() - currentTeamState.startedAt) / 1000);
+  const raw = Math.floor((Date.now() - (currentTeamState.startedAt || Date.now())) / 1000);
   const pen = currentTeamState.penaltySeconds || 0;
   document.getElementById('submit-summary-box').innerHTML = `
     <div><b>Team:</b> ${currentTeamState.teamName}</div>
-    <div><b>Flags:</b> ${currentTeamState.flagsCollected} / 5</div>
+    <div><b>Flags:</b> ${currentTeamState.flagsCollected || 0} / 5</div>
     <div><b>Raw Time:</b> ${formatSec(raw)} | <b>Penalties:</b> +${pen}s</div>
     <div><b>Final Time:</b> <span style="color:#34d399; font-weight:700;">${formatSec(raw + pen)}</span></div>
   `;
@@ -948,7 +958,6 @@ document.getElementById('btn-submit-confirm').addEventListener('click', async ()
 });
 document.getElementById('btn-submit-cancel').addEventListener('click', () => submitModal.classList.remove('open'));
 
-// Primary Interaction (Flags, Decoys, Doors)
 async function interact() {
   if (pinModal.classList.contains('open') || invModal.classList.contains('open')) return;
   const f = flagSystem.findInteractable(player.pos);
@@ -1064,7 +1073,6 @@ function checkCollision(nx, nz, y) {
   return wallColliders.some((wb) => box.intersectsBox(wb));
 }
 
-// HUD buttons
 document.getElementById('btn-cutaway').addEventListener('click', (e) => {
   const isCut = e.currentTarget.classList.toggle('active');
   cutawayMeshes.forEach((m) => { m.visible = !isCut; });
@@ -1078,7 +1086,7 @@ document.getElementById('btn-lighting').addEventListener('click', (e) => {
 document.getElementById('btn-reset-pos').addEventListener('click', () => player.pos.set(0, 0, 9.5));
 
 // ============================================================================
-// 8. RENDER LOOP
+// 8. ANIMATION LOOP & CLOUD BROADCAST
 // ============================================================================
 const clock = new THREE.Clock();
 let syncTimer = 0;
@@ -1124,20 +1132,19 @@ function animate() {
     }
 
     syncTimer += dt;
-    if (syncTimer >= 0.15) {
+    if (syncTimer >= 0.2) {
       syncTimer = 0;
       gameService.updatePosition(activeTeamId, player.pos.x, player.pos.y, player.pos.z, player.yaw, speed > 0 ? 'WALK' : 'IDLE');
     }
   }
 
-  playerAvatar.update(dt, speed, false);
+  playerAvatar.update(dt, speed);
   flagSystem.update(dt);
 
-  // HUD timer & penalty check
   if (currentTeamState) {
     const now = Date.now();
     const end = currentTeamState.completedAt || now;
-    timerEl.textContent = `⏱️ ${formatSec(Math.max(0, Math.floor((end - currentTeamState.startedAt) / 1000)))}`;
+    timerEl.textContent = `⏱️ ${formatSec(Math.max(0, Math.floor((end - (currentTeamState.startedAt || now)) / 1000)))}`;
     if (currentTeamState.penaltyActiveUntil > now) {
       penaltyEl.style.display = 'inline-flex';
       penaltyEl.textContent = `⚠️ DECOY PENALTY: ${Math.ceil((currentTeamState.penaltyActiveUntil - now) / 1000)}s`;
