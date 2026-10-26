@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Techyon Twin-Quest — PESCE Mandya Expanded Campus (AIML • CRC • GBL • Turf)</title>
+  <title>Techyon Twin-Quest — Participant Portal (PESCE Mandya)</title>
   <style>
     :root {
       --bg-glass: rgba(15, 23, 42, 0.88);
@@ -12,62 +12,56 @@
       --accent-cyan: #38bdf8;
       --accent-amber: #f59e0b;
       --accent-rose: #f43f5e;
-      --accent-emerald: #10b981;
       --text-main: #f8fafc;
       --text-muted: #94a3b8;
     }
 
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      user-select: none;
-      -webkit-user-select: none;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; font-family: 'Inter', system-ui, sans-serif; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #0f172a; color: var(--text-main); }
+    #canvas-container { width: 100%; height: 100%; position: absolute; inset: 0; z-index: 1; }
 
-    body, html {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background: #0f172a;
-      color: var(--text-main);
-    }
-
-    #canvas-container {
-      width: 100%;
-      height: 100%;
-      position: absolute;
+    /* Participant Team Login Overlay */
+    #login-overlay {
+      position: fixed;
       inset: 0;
-      z-index: 1;
-    }
-
-    .hud {
-      position: absolute;
-      inset: 0;
-      z-index: 10;
-      pointer-events: none;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: 14px 18px;
-    }
-
-    .hud-top {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-
-    .pill-group {
+      z-index: 100;
+      background: radial-gradient(circle at center, rgba(15, 23, 42, 0.86), #020617);
+      backdrop-filter: blur(12px);
       display: flex;
       align-items: center;
-      gap: 8px;
-      pointer-events: auto;
-      flex-wrap: wrap;
+      justify-content: center;
+      padding: 20px;
     }
+
+    .login-card {
+      background: linear-gradient(180deg, #1e293b, #0f172a);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      border-radius: 18px;
+      width: 100%;
+      max-width: 410px;
+      padding: 28px;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.75);
+    }
+
+    .login-field {
+      width: 100%;
+      background: #020617;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      padding: 11px 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      margin-top: 6px;
+      margin-bottom: 14px;
+      outline: none;
+      user-select: text;
+    }
+
+    .login-field:focus { border-color: var(--accent-teal); }
+
+    .hud { position: absolute; inset: 0; z-index: 10; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 14px 18px; }
+    .hud-top, .hud-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+    .pill-group { display: flex; align-items: center; gap: 8px; pointer-events: auto; flex-wrap: wrap; }
 
     .pill {
       background: var(--bg-glass);
@@ -79,338 +73,51 @@
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.18s ease;
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+      text-decoration: none;
     }
 
-    .pill:hover {
-      background: rgba(30, 41, 59, 0.95);
-      transform: translateY(-1px);
-    }
+    .pill.active { background: rgba(20, 184, 166, 0.25); border-color: var(--accent-teal); color: #5eead4; }
+    .pill.amber { background: rgba(245, 158, 11, 0.22); border-color: rgba(245, 158, 11, 0.55); color: #fde68a; }
+    .pill.firebase-connected { background: rgba(16, 185, 129, 0.2); border-color: rgba(16, 185, 129, 0.6); color: #6ee7b7; }
+    .pill.emerald { background: linear-gradient(135deg, #059669, #10b981); border-color: #6ee7b7; color: #fff; }
 
-    .pill.active {
-      background: rgba(20, 184, 166, 0.25);
-      border-color: var(--accent-teal);
-      color: #5eead4;
-    }
+    #penalty-banner { display: none; background: rgba(190, 18, 60, 0.92); border: 1px solid #fda4af; color: #fff; padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 
-    .pill.amber {
-      background: rgba(245, 158, 11, 0.22);
-      border-color: rgba(245, 158, 11, 0.55);
-      color: #fde68a;
-    }
+    .hud-middle { display: flex; justify-content: space-between; align-items: flex-start; flex: 1; margin-top: 12px; gap: 12px; }
+    .zone-panel { background: var(--bg-glass); backdrop-filter: blur(14px); border: 1px solid var(--border-glass); border-radius: 14px; padding: 13px; width: 245px; pointer-events: auto; }
+    .zone-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--accent-cyan); text-transform: uppercase; margin-bottom: 9px; display: flex; justify-content: space-between; }
+    .zone-btn { width: 100%; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08); color: var(--text-main); padding: 7.5px 10px; border-radius: 8px; font-size: 11.8px; display: flex; justify-content: space-between; margin-bottom: 5px; cursor: pointer; }
+    .zone-btn.active { background: rgba(20, 184, 166, 0.28); border-color: var(--accent-teal); color: #fff; }
 
-    .pill.firebase-connected {
-      background: rgba(16, 185, 129, 0.2);
-      border-color: rgba(16, 185, 129, 0.6);
-      color: #6ee7b7;
-    }
+    .info-panel { background: var(--bg-glass); backdrop-filter: blur(14px); border: 1px solid var(--border-glass); border-radius: 14px; padding: 15px; width: 320px; pointer-events: auto; }
+    .info-header { color: var(--accent-amber); font-size: 13.5px; font-weight: 700; margin-bottom: 6px; }
+    .info-desc { font-size: 11.8px; line-height: 1.45; color: #cbd5e1; margin-bottom: 10px; }
+    .status-box { background: rgba(16, 185, 129, 0.13); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 8px; padding: 7px 10px; font-size: 11px; color: #a7f3d0; display: flex; justify-content: space-between; margin-bottom: 10px; }
+    .controls-legend { font-size: 11px; color: var(--text-muted); line-height: 1.7; }
+    .kbd { background: rgba(255, 255, 255, 0.15); color: #fff; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; }
 
-    .pill.emerald {
-      background: linear-gradient(135deg, #059669, #10b981);
-      border-color: #6ee7b7;
-      color: #ffffff;
-      animation: pulseGlow 1.6s infinite;
-    }
+    #interaction-toast { position: absolute; bottom: 76px; left: 50%; transform: translateX(-50%); background: rgba(15, 23, 42, 0.94); border: 1px solid var(--accent-teal); color: #fff; padding: 9px 20px; border-radius: 999px; font-size: 13px; font-weight: 600; z-index: 20; pointer-events: none; opacity: 0; transition: opacity 0.18s; }
+    #feedback-banner { position: absolute; top: 72px; left: 50%; transform: translateX(-50%); background: rgba(15, 23, 42, 0.95); border: 1px solid var(--accent-cyan); color: #fff; padding: 10px 22px; border-radius: 999px; font-size: 13px; font-weight: 700; z-index: 35; pointer-events: none; opacity: 0; transition: opacity 0.25s; }
 
-    @keyframes pulseGlow {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
-      50% { box-shadow: 0 0 18px 4px rgba(16, 185, 129, 0.75); }
-    }
-
-    select.team-select {
-      background: var(--bg-glass);
-      color: #38bdf8;
-      border: 1px solid rgba(56, 189, 248, 0.45);
-      padding: 6px 12px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 700;
-      cursor: pointer;
-      outline: none;
-    }
-
-    #penalty-banner {
-      display: none;
-      background: rgba(190, 18, 60, 0.92);
-      border: 1px solid #fda4af;
-      color: #fff;
-      padding: 6px 14px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 700;
-    }
-
-    .hud-middle {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      flex: 1;
-      margin-top: 12px;
-      gap: 12px;
-    }
-
-    .zone-panel {
-      background: var(--bg-glass);
-      backdrop-filter: blur(14px);
-      border: 1px solid var(--border-glass);
-      border-radius: 14px;
-      padding: 13px;
-      width: 250px;
-      pointer-events: auto;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-    }
-
-    .zone-title {
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      color: var(--accent-cyan);
-      text-transform: uppercase;
-      margin-bottom: 9px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .zone-btn {
-      width: 100%;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      color: var(--text-main);
-      padding: 7.5px 10px;
-      border-radius: 8px;
-      font-size: 11.8px;
-      font-weight: 500;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 5px;
-      cursor: pointer;
-      transition: all 0.16s ease;
-    }
-
-    .zone-btn:hover { background: rgba(255, 255, 255, 0.12); }
-    .zone-btn.active {
-      background: rgba(20, 184, 166, 0.28);
-      border-color: var(--accent-teal);
-      color: #fff;
-    }
-
-    .info-panel {
-      background: var(--bg-glass);
-      backdrop-filter: blur(14px);
-      border: 1px solid var(--border-glass);
-      border-radius: 14px;
-      padding: 15px;
-      width: 335px;
-      pointer-events: auto;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
-    }
-
-    .info-header {
-      color: var(--accent-amber);
-      font-size: 13.5px;
-      font-weight: 700;
-      margin-bottom: 6px;
-    }
-
-    .info-desc {
-      font-size: 11.8px;
-      line-height: 1.45;
-      color: #cbd5e1;
-      margin-bottom: 10px;
-    }
-
-    .status-box {
-      background: rgba(16, 185, 129, 0.13);
-      border: 1px solid rgba(16, 185, 129, 0.35);
-      border-radius: 8px;
-      padding: 7px 10px;
-      font-size: 11px;
-      color: #a7f3d0;
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 10px;
-    }
-
-    .controls-legend {
-      font-size: 11px;
-      color: var(--text-muted);
-      line-height: 1.7;
-    }
-
-    .kbd {
-      background: rgba(255, 255, 255, 0.15);
-      color: #fff;
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-size: 10px;
-      font-weight: 700;
-    }
-
-    #spectator-panel {
-      display: none;
-      background: rgba(15, 23, 42, 0.94);
-      backdrop-filter: blur(16px);
-      border: 1px solid rgba(56, 189, 248, 0.4);
-      border-radius: 14px;
-      padding: 15px;
-      width: 410px;
-      max-height: 72vh;
-      overflow-y: auto;
-      pointer-events: auto;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
-    }
-
-    .spec-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 11.5px;
-      margin-top: 8px;
-    }
-
-    .spec-table th {
-      text-align: left;
-      color: var(--text-muted);
-      padding: 6px 4px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-    }
-
-    .spec-table td {
-      padding: 7px 4px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    }
-
-    #interaction-toast {
-      position: absolute;
-      bottom: 76px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(15, 23, 42, 0.94);
-      border: 1px solid var(--accent-teal);
-      color: #fff;
-      padding: 9px 20px;
-      border-radius: 999px;
-      font-size: 13px;
-      font-weight: 600;
-      z-index: 20;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.18s ease;
-    }
-
-    #feedback-banner {
-      position: absolute;
-      top: 72px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(15, 23, 42, 0.95);
-      border: 1px solid var(--accent-cyan);
-      color: #fff;
-      padding: 10px 22px;
-      border-radius: 999px;
-      font-size: 13px;
-      font-weight: 700;
-      z-index: 35;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.25s ease;
-    }
-
-    .modal-backdrop {
-      display: none;
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      background: rgba(2, 6, 23, 0.72);
-      backdrop-filter: blur(8px);
-      align-items: center;
-      justify-content: center;
-      padding: 16px;
-    }
-
+    .modal-backdrop { display: none; position: fixed; inset: 0; z-index: 50; background: rgba(2, 6, 23, 0.72); backdrop-filter: blur(8px); align-items: center; justify-content: center; padding: 16px; }
     .modal-backdrop.open { display: flex; }
-
-    .modal-card {
-      background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
-      border: 1px solid rgba(56, 189, 248, 0.35);
-      border-radius: 16px;
-      width: 100%;
-      max-width: 430px;
-      padding: 22px;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
-      pointer-events: auto;
-    }
-
-    .modal-badge {
-      display: inline-block;
-      font-size: 10.5px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      padding: 3px 9px;
-      border-radius: 999px;
-      background: rgba(20, 184, 166, 0.2);
-      color: #5eead4;
-      margin-bottom: 8px;
-    }
-
+    .modal-card { background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%); border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 16px; width: 100%; max-width: 430px; padding: 22px; pointer-events: auto; }
+    .modal-badge { display: inline-block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: rgba(20, 184, 166, 0.2); color: #5eead4; margin-bottom: 8px; }
     .modal-title { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
     .modal-desc { font-size: 12.5px; color: #cbd5e1; line-height: 1.5; margin-bottom: 16px; }
-
-    .pin-input {
-      width: 100%;
-      background: #020617;
-      border: 2px solid rgba(56, 189, 248, 0.45);
-      border-radius: 10px;
-      color: #38bdf8;
-      font-size: 28px;
-      font-weight: 800;
-      letter-spacing: 0.45em;
-      text-align: center;
-      padding: 12px;
-      outline: none;
-      margin-bottom: 10px;
-      user-select: text;
-      -webkit-user-select: text;
-    }
-
+    .pin-input { width: 100%; background: #020617; border: 2px solid rgba(56, 189, 248, 0.45); border-radius: 10px; color: #38bdf8; font-size: 28px; font-weight: 800; letter-spacing: 0.45em; text-align: center; padding: 12px; outline: none; margin-bottom: 10px; user-select: text; }
     .modal-msg { min-height: 20px; font-size: 12px; font-weight: 600; margin-bottom: 12px; color: var(--accent-rose); }
     .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
-
     .btn { padding: 9px 16px; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
     .btn-secondary { background: rgba(255, 255, 255, 0.08); color: #e2e8f0; border-color: rgba(255, 255, 255, 0.15); }
     .btn-primary { background: linear-gradient(135deg, #0d9488, #0284c7); color: #fff; }
-
     .inventory-grid { display: flex; flex-direction: column; gap: 9px; margin-bottom: 16px; }
-    .inv-slot {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 12px;
-      border-radius: 10px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-    }
+    .inv-slot { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-radius: 10px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.1); }
     .inv-slot.collected { background: rgba(16, 185, 129, 0.14); border-color: rgba(16, 185, 129, 0.45); }
-
-    .hud-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-    .status-bar {
-      background: var(--bg-glass);
-      backdrop-filter: blur(12px);
-      border: 1px solid var(--border-glass);
-      color: #cbd5e1;
-      padding: 8px 15px;
-      border-radius: 999px;
-      font-size: 11.5px;
-      pointer-events: auto;
-    }
-
-    @media (max-width: 950px) { .info-panel { display: none; } }
+    .status-bar { background: var(--bg-glass); border: 1px solid var(--border-glass); color: #cbd5e1; padding: 8px 15px; border-radius: 999px; font-size: 11.5px; pointer-events: auto; }
   </style>
 
   <script type="importmap">
@@ -424,16 +131,37 @@
     }
   </script>
 </head>
-<body>
-  <div id="canvas-container"></div>
+<body data-page="participant">
+  <!-- TEAM AUTHENTICATION OVERLAY -->
+  <div id="login-overlay">
+    <div class="login-card">
+      <div class="modal-badge">TECHYON TWIN-QUEST DRIVER LOGIN</div>
+      <div class="modal-title">Participant Team Sign-In</div>
+      <div class="modal-desc">Select your assigned team (Team 1 – Team 12) and enter your team password.</div>
 
+      <label style="font-size:12px; color:#94a3b8; font-weight:600;">Select Team</label>
+      <select id="login-team-select" class="login-field"></select>
+
+      <label style="font-size:12px; color:#94a3b8; font-weight:600;">Team Password</label>
+      <input type="password" id="login-pass-input" class="login-field" placeholder="e.g., tachyon001" autocomplete="off" />
+
+      <div class="modal-msg" id="login-error-msg"></div>
+      <button class="btn btn-primary" id="btn-login-submit" style="width:100%; padding:12px;">Unlock Driver Session →</button>
+
+      <div style="margin-top:16px; text-align:center; font-size:11.5px; color:#64748b;">
+        Event Organizer? <a href="./admin.html" style="color:#38bdf8; text-decoration:none; font-weight:600;">Open Separate Admin & God-Mode Page →</a>
+      </div>
+    </div>
+  </div>
+
+  <div id="canvas-container"></div>
   <div id="interaction-toast">Interact — Press [E]</div>
   <div id="feedback-banner">Flag Collected!</div>
 
   <div class="hud">
     <div class="hud-top">
       <div class="pill-group">
-        <select id="team-selector" class="team-select"></select>
+        <div class="pill amber" id="locked-team-badge">🔒 Not Logged In</div>
         <div class="pill active" id="hud-flag-counter">🚩 Flags: 0 / 5</div>
         <button class="pill" id="btn-backpack">🎒 Backpack (I)</button>
         <div class="pill" id="hud-timer">⏱️ 00:00</div>
@@ -445,8 +173,8 @@
         <div class="pill amber" id="conn-badge">🔌 CONNECTING...</div>
         <button class="pill active" id="btn-view-mode">🚶 View: 3rd Person</button>
         <button class="pill" id="btn-cutaway">🏛️ Cutaway: Off</button>
-        <button class="pill" id="btn-spectator">👁️ God-Mode Spectator (G)</button>
         <button class="pill" id="btn-lighting">☀️ Daylight</button>
+        <button class="pill" id="btn-logout" title="Switch Team Login">🚪 Logout</button>
       </div>
     </div>
 
@@ -460,16 +188,16 @@
         <button class="zone-btn active" data-zone="2"><span>🚪 AIML Entrance Portico</span><span>2</span></button>
         <button class="zone-btn" data-zone="3"><span>🪜 AIML Switchback Stairs</span><span>3</span></button>
         <button class="zone-btn" data-zone="4"><span>💻 AIML 1st Floor Lab</span><span>4</span></button>
-        <button class="zone-btn" data-zone="5"><span>🏢 CRC Building (3 Floors)</span><span>5</span></button>
+        <button class="zone-btn" data-zone="5"><span>🏢 CRC Glass Tower (3F)</span><span>5</span></button>
         <button class="zone-btn" data-zone="6"><span>🎓 CRC 2nd Floor (Top)</span><span>6</span></button>
-        <button class="zone-btn" data-zone="7"><span>🏛️ GBL Building (2 Floors)</span><span>7</span></button>
+        <button class="zone-btn" data-zone="7"><span>🏛️ GBL Heritage Block</span><span>7</span></button>
         <button class="zone-btn" data-zone="8"><span>⚽ PESCE Football Turf</span><span>8</span></button>
       </div>
 
-      <div class="info-panel" id="player-info-panel">
-        <div class="info-header" id="mode-title">⚡ PESCE Expanded Digital Twin</div>
+      <div class="info-panel">
+        <div class="info-header">⚡ Techyon Twin-Quest Active</div>
         <div class="info-desc">
-          Explore the reconstructed <b>AIML Department</b>, the 3-floor <b>CRC Block</b>, the 2-floor <b>GBL Block</b>, the <b>Innovation Annex</b>, and the <b>Football Turf</b>. Collect all 5 glowing flags!
+          Explore the 4 distinct campus buildings (<b>AIML</b>, <b>CRC 3-Floor Glass Tower</b>, <b>GBL Heritage Clock-Tower Block</b>, <b>Innovation Vault Pavilion</b>) and the <b>Football Turf</b>.
         </div>
         <div class="status-box">
           <span id="room-indicator">Zone: AIML Portico</span>
@@ -477,34 +205,15 @@
         </div>
         <div class="controls-legend">
           <div><span class="kbd">WASD</span> / <span class="kbd">Arrows</span> Move &nbsp;|&nbsp; <span class="kbd">Shift</span> Sprint</div>
-          <div><span class="kbd">Mouse Drag</span> Look / Orbit 360° &nbsp;|&nbsp; <span class="kbd">1–8</span> Teleport</div>
-          <div><span class="kbd">E</span> Interact Flag / Door &nbsp;|&nbsp; <span class="kbd">I</span> Backpack &nbsp;|&nbsp; <span class="kbd">G</span> Spectator</div>
+          <div><span class="kbd">Mouse Drag</span> Look 360° &nbsp;|&nbsp; <span class="kbd">1–8</span> Teleport</div>
+          <div><span class="kbd">E</span> Interact Flag / Door &nbsp;|&nbsp; <span class="kbd">I</span> Backpack &nbsp;|&nbsp; <span class="kbd">V</span> 1P/3P</div>
         </div>
-      </div>
-
-      <div id="spectator-panel">
-        <div class="zone-title">
-          <span>🛰️ GOD-MODE CAMPUS SPECTATOR</span>
-          <span style="color:#fde68a;">LIVE CLOUD</span>
-        </div>
-        <table class="spec-table">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Team</th>
-              <th>Flags</th>
-              <th>Penalty</th>
-              <th>Status / Time</th>
-            </tr>
-          </thead>
-          <tbody id="spectator-tbody"></tbody>
-        </table>
       </div>
     </div>
 
     <div class="hud-bottom">
       <div class="status-bar">
-        PESCE Campus Digital Twin • AIML (2F) • CRC (3F) • GBL (2F) • Football Stadium • Firebase Sync
+        PESCE Campus Digital Twin • Participant Mode • Live Synced with Admin Command Center
       </div>
       <div class="pill-group">
         <button class="pill" id="btn-reset-pos">Respawn at AIML Portico ↺</button>
@@ -532,7 +241,7 @@
     <div class="modal-card">
       <div class="modal-badge">TACHYON BACKPACK INVENTORY</div>
       <div class="modal-title" id="inv-team-title">Team Backpack (0 / 5 Flags)</div>
-      <div class="modal-desc">Flags are mounted on your 3D backpack and synced across the campus.</div>
+      <div class="modal-desc">Flags are mounted on your 3D backpack and synced to Firebase.</div>
       <div class="inventory-grid" id="inventory-slots-container"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btn-inv-close">Close Backpack (Esc)</button>
