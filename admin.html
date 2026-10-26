@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Techyon Twin-Quest — Separate Admin & God-Mode Command Center</title>
+  <style>
+    :root {
+      --bg-glass: rgba(15, 23, 42, 0.92);
+      --border-glass: rgba(56, 189, 248, 0.35);
+      --accent-teal: #14b8a6;
+      --accent-cyan: #38bdf8;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; font-family: 'Inter', system-ui, sans-serif; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #020617; color: var(--text-main); }
+    #canvas-container { width: 100%; height: 100%; position: absolute; inset: 0; z-index: 1; }
+
+    #admin-login-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: radial-gradient(circle at center, rgba(15, 23, 42, 0.9), #020617);
+      backdrop-filter: blur(14px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .login-card {
+      background: linear-gradient(180deg, #1e293b, #0f172a);
+      border: 1px solid var(--border-glass);
+      border-radius: 18px;
+      width: 100%;
+      max-width: 400px;
+      padding: 28px;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8);
+    }
+
+    .login-field {
+      width: 100%;
+      background: #020617;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      padding: 11px 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      margin: 8px 0 14px;
+      outline: none;
+    }
+
+    .hud { position: absolute; inset: 0; z-index: 10; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 14px 18px; }
+    .hud-top, .hud-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+    .pill-group { display: flex; align-items: center; gap: 8px; pointer-events: auto; flex-wrap: wrap; }
+
+    .pill {
+      background: var(--bg-glass);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.16);
+      color: var(--text-main);
+      padding: 7px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      text-decoration: none;
+    }
+
+    .pill.active { background: rgba(20, 184, 166, 0.28); border-color: var(--accent-teal); color: #5eead4; }
+    .pill.amber { background: rgba(245, 158, 11, 0.22); border-color: rgba(245, 158, 11, 0.55); color: #fde68a; }
+    .pill.rose { background: rgba(244, 63, 94, 0.22); border-color: var(--accent-rose); color: #fda4af; }
+
+    .admin-panel {
+      background: var(--bg-glass);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-glass);
+      border-radius: 14px;
+      padding: 16px;
+      width: 590px;
+      max-height: 78vh;
+      overflow-y: auto;
+      pointer-events: auto;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+      margin-top: 10px;
+    }
+
+    .spec-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11.5px;
+      margin-top: 10px;
+    }
+
+    .spec-table th {
+      text-align: left;
+      color: var(--accent-cyan);
+      padding: 7px 6px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+      font-size: 10.5px;
+      text-transform: uppercase;
+    }
+
+    .spec-table td {
+      padding: 8px 6px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    }
+
+    .follow-btn {
+      background: rgba(56, 189, 248, 0.18);
+      border: 1px solid rgba(56, 189, 248, 0.5);
+      color: #7dd3fc;
+      padding: 4px 9px;
+      border-radius: 6px;
+      font-size: 10.5px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .follow-btn.active {
+      background: #14b8a6;
+      color: #020617;
+      border-color: #5eead4;
+    }
+  </style>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js"
+      }
+    }
+  </script>
+</head>
+<body data-page="admin">
+  <!-- ADMIN PASSCODE GATE -->
+  <div id="admin-login-overlay">
+    <div class="login-card">
+      <div style="font-size:11px; font-weight:700; color:#38bdf8; letter-spacing:0.08em;">ORGANIZER COMMAND CENTER</div>
+      <h2 style="margin:6px 0 8px; font-size:20px;">Admin God-Mode Login</h2>
+      <p style="font-size:12px; color:#94a3b8; margin-bottom:12px;">
+        Enter the organizer passcode (<b>tachyonadmin</b>) to unlock Top-Down God-Mode and monitor all 12 participants live.
+      </p>
+      <input type="password" id="admin-pass-input" class="login-field" placeholder="Enter admin passcode..." />
+      <div id="admin-login-err" style="color:#f43f5e; font-size:12px; min-height:18px; margin-bottom:8px;"></div>
+      <button id="btn-admin-unlock" class="pill active" style="width:100%; justify-content:center; padding:11px;">Unlock God-Mode Spectator →</button>
+    </div>
+  </div>
+
+  <div id="canvas-container"></div>
+
+  <div class="hud">
+    <div class="hud-top">
+      <div class="pill-group">
+        <div class="pill amber">🛰️ ADMIN GOD-MODE COMMAND CENTER</div>
+        <div class="pill active" id="admin-cam-status">📷 Camera: Top-Down Orthographic Map</div>
+        <button class="pill active" id="btn-admin-topdown">🗺️ Top-Down God-Mode</button>
+        <button class="pill" id="btn-admin-freeorbit">🚁 Free 3D Campus Drone</button>
+        <button class="pill" id="btn-admin-roof">🏠 Roofs: Hidden (Interior X-Ray)</button>
+      </div>
+
+      <div class="pill-group">
+        <div class="pill" id="conn-badge">⚡ FIREBASE LIVE</div>
+        <button class="pill rose" id="btn-admin-reset-all">⚠️ Reset All 12 Teams</button>
+        <a href="./index.html" class="pill">← Participant Login Page</a>
+      </div>
+    </div>
+
+    <div style="display:flex; justify-content:flex-end; flex:1;">
+      <div class="admin-panel">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-size:12px; font-weight:800; color:#38bdf8; letter-spacing:0.06em;">
+            📊 LIVE 12-TEAM ACTIVITY & TELEMETRY MONITOR
+          </span>
+          <span style="font-size:11px; color:#fde68a; font-weight:700;">Click "Follow 3D" to watch any team</span>
+        </div>
+
+        <table class="spec-table">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Team</th>
+              <th>Current Building / Room</th>
+              <th>Activity</th>
+              <th>Flags</th>
+              <th>Penalty</th>
+              <th>Time</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="spectator-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="hud-bottom">
+      <div class="pill">
+        Scroll Wheel: Zoom Map • Click "Follow 3D" on any row to lock camera onto that participant in real time
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
