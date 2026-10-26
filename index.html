@@ -3,11 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Techyon Twin-Quest — PESCE Mandya AIML 3D Digital Twin</title>
+  <title>Techyon Twin-Quest — PESCE Mandya Expanded Campus (AIML • CRC • GBL • Turf)</title>
   <style>
     :root {
       --bg-glass: rgba(15, 23, 42, 0.88);
-      --bg-glass-light: rgba(30, 41, 59, 0.82);
       --border-glass: rgba(255, 255, 255, 0.15);
       --accent-teal: #14b8a6;
       --accent-cyan: #38bdf8;
@@ -43,7 +42,6 @@
       z-index: 1;
     }
 
-    /* Main HUD Layer */
     .hud {
       position: absolute;
       inset: 0;
@@ -144,10 +142,8 @@
       border-radius: 999px;
       font-size: 12px;
       font-weight: 700;
-      letter-spacing: 0.03em;
     }
 
-    /* Middle Panels */
     .hud-middle {
       display: flex;
       justify-content: space-between;
@@ -163,7 +159,7 @@
       border: 1px solid var(--border-glass);
       border-radius: 14px;
       padding: 13px;
-      width: 235px;
+      width: 250px;
       pointer-events: auto;
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
     }
@@ -185,9 +181,9 @@
       background: rgba(255, 255, 255, 0.05);
       border: 1px solid rgba(255, 255, 255, 0.08);
       color: var(--text-main);
-      padding: 8px 10px;
+      padding: 7.5px 10px;
       border-radius: 8px;
-      font-size: 12px;
+      font-size: 11.8px;
       font-weight: 500;
       display: flex;
       justify-content: space-between;
@@ -210,7 +206,7 @@
       border: 1px solid var(--border-glass);
       border-radius: 14px;
       padding: 15px;
-      width: 325px;
+      width: 335px;
       pointer-events: auto;
       box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
     }
@@ -256,7 +252,6 @@
       font-weight: 700;
     }
 
-    /* God-Mode Spectator Leaderboard */
     #spectator-panel {
       display: none;
       background: rgba(15, 23, 42, 0.94);
@@ -290,7 +285,6 @@
       border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     }
 
-    /* Notifications & Modals */
     #interaction-toast {
       position: absolute;
       bottom: 76px;
@@ -307,7 +301,6 @@
       pointer-events: none;
       opacity: 0;
       transition: opacity 0.18s ease;
-      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.45);
     }
 
     #feedback-banner {
@@ -340,9 +333,7 @@
       padding: 16px;
     }
 
-    .modal-backdrop.open {
-      display: flex;
-    }
+    .modal-backdrop.open { display: flex; }
 
     .modal-card {
       background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
@@ -368,18 +359,8 @@
       margin-bottom: 8px;
     }
 
-    .modal-title {
-      font-size: 18px;
-      font-weight: 700;
-      margin-bottom: 6px;
-    }
-
-    .modal-desc {
-      font-size: 12.5px;
-      color: #cbd5e1;
-      line-height: 1.5;
-      margin-bottom: 16px;
-    }
+    .modal-title { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+    .modal-desc { font-size: 12.5px; color: #cbd5e1; line-height: 1.5; margin-bottom: 16px; }
 
     .pin-input {
       width: 100%;
@@ -398,57 +379,14 @@
       -webkit-user-select: text;
     }
 
-    .pin-input:focus {
-      border-color: var(--accent-teal);
-      box-shadow: 0 0 15px rgba(20, 184, 166, 0.35);
-    }
+    .modal-msg { min-height: 20px; font-size: 12px; font-weight: 600; margin-bottom: 12px; color: var(--accent-rose); }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
 
-    .modal-msg {
-      min-height: 20px;
-      font-size: 12px;
-      font-weight: 600;
-      margin-bottom: 12px;
-      color: var(--accent-rose);
-    }
+    .btn { padding: 9px 16px; border-radius: 8px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
+    .btn-secondary { background: rgba(255, 255, 255, 0.08); color: #e2e8f0; border-color: rgba(255, 255, 255, 0.15); }
+    .btn-primary { background: linear-gradient(135deg, #0d9488, #0284c7); color: #fff; }
 
-    .modal-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 10px;
-    }
-
-    .btn {
-      padding: 9px 16px;
-      border-radius: 8px;
-      font-size: 12.5px;
-      font-weight: 600;
-      cursor: pointer;
-      border: 1px solid transparent;
-    }
-
-    .btn-secondary {
-      background: rgba(255, 255, 255, 0.08);
-      color: #e2e8f0;
-      border-color: rgba(255, 255, 255, 0.15);
-    }
-
-    .btn-primary {
-      background: linear-gradient(135deg, #0d9488, #0284c7);
-      color: #fff;
-    }
-
-    .btn-primary:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    .inventory-grid {
-      display: flex;
-      flex-direction: column;
-      gap: 9px;
-      margin-bottom: 16px;
-    }
-
+    .inventory-grid { display: flex; flex-direction: column; gap: 9px; margin-bottom: 16px; }
     .inv-slot {
       display: flex;
       justify-content: space-between;
@@ -458,20 +396,9 @@
       background: rgba(255, 255, 255, 0.04);
       border: 1px solid rgba(255, 255, 255, 0.1);
     }
+    .inv-slot.collected { background: rgba(16, 185, 129, 0.14); border-color: rgba(16, 185, 129, 0.45); }
 
-    .inv-slot.collected {
-      background: rgba(16, 185, 129, 0.14);
-      border-color: rgba(16, 185, 129, 0.45);
-    }
-
-    .hud-bottom {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-
+    .hud-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
     .status-bar {
       background: var(--bg-glass);
       backdrop-filter: blur(12px);
@@ -483,47 +410,9 @@
       pointer-events: auto;
     }
 
-    #mobile-controls {
-      display: none;
-      position: absolute;
-      bottom: 66px;
-      left: 20px;
-      right: 20px;
-      z-index: 25;
-      justify-content: space-between;
-      align-items: flex-end;
-      pointer-events: none;
-    }
-
-    .joystick-zone {
-      width: 105px;
-      height: 105px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.12);
-      border: 2px solid rgba(255, 255, 255, 0.3);
-      position: relative;
-      pointer-events: auto;
-      touch-action: none;
-    }
-
-    .joystick-knob {
-      width: 42px;
-      height: 42px;
-      border-radius: 50%;
-      background: rgba(20, 184, 166, 0.88);
-      position: absolute;
-      top: 30px;
-      left: 30px;
-      pointer-events: none;
-    }
-
-    @media (max-width: 950px) {
-      .info-panel { display: none; }
-      #mobile-controls { display: flex; }
-    }
+    @media (max-width: 950px) { .info-panel { display: none; } }
   </style>
 
-  <!-- Modular Import Map with Three.js and Firebase 10.8 -->
   <script type="importmap">
     {
       "imports": {
@@ -541,11 +430,10 @@
   <div id="interaction-toast">Interact — Press [E]</div>
   <div id="feedback-banner">Flag Collected!</div>
 
-  <!-- HUD -->
   <div class="hud">
     <div class="hud-top">
       <div class="pill-group">
-        <select id="team-selector" class="team-select" title="Switch Active Team Session"></select>
+        <select id="team-selector" class="team-select"></select>
         <div class="pill active" id="hud-flag-counter">🚩 Flags: 0 / 5</div>
         <button class="pill" id="btn-backpack">🎒 Backpack (I)</button>
         <div class="pill" id="hud-timer">⏱️ 00:00</div>
@@ -554,11 +442,11 @@
       </div>
 
       <div class="pill-group">
-        <div class="pill amber" id="conn-badge">🔌 CONNECTING FIREBASE...</div>
+        <div class="pill amber" id="conn-badge">🔌 CONNECTING...</div>
         <button class="pill active" id="btn-view-mode">🚶 View: 3rd Person</button>
         <button class="pill" id="btn-cutaway">🏛️ Cutaway: Off</button>
         <button class="pill" id="btn-spectator">👁️ God-Mode Spectator (G)</button>
-        <button class="pill" id="btn-lighting">🌅 Golden Hour</button>
+        <button class="pill" id="btn-lighting">☀️ Daylight</button>
       </div>
     </div>
 
@@ -566,36 +454,38 @@
       <div class="zone-panel">
         <div class="zone-title">
           <span>📍 Campus Zones</span>
-          <span style="font-size: 10px; color: #94a3b8;">Keys 1–6</span>
+          <span style="font-size: 10px; color: #94a3b8;">Keys 1–8</span>
         </div>
-        <button class="zone-btn" data-zone="1"><span>🏛️ Exterior Facade</span><span>1</span></button>
-        <button class="zone-btn active" data-zone="2"><span>🚪 Entrance Portico</span><span>2</span></button>
-        <button class="zone-btn" data-zone="3"><span>🪜 Switchback Stairs</span><span>3</span></button>
-        <button class="zone-btn" data-zone="4"><span>🚶 1st Floor Corridor</span><span>4</span></button>
-        <button class="zone-btn" data-zone="5"><span>💻 AI & ML Lab (F-L1)</span><span>5</span></button>
-        <button class="zone-btn" data-zone="6"><span>🎓 Smart Classroom (F-R1)</span><span>6</span></button>
+        <button class="zone-btn" data-zone="1"><span>🏛️ AIML Reference Orbit</span><span>1</span></button>
+        <button class="zone-btn active" data-zone="2"><span>🚪 AIML Entrance Portico</span><span>2</span></button>
+        <button class="zone-btn" data-zone="3"><span>🪜 AIML Switchback Stairs</span><span>3</span></button>
+        <button class="zone-btn" data-zone="4"><span>💻 AIML 1st Floor Lab</span><span>4</span></button>
+        <button class="zone-btn" data-zone="5"><span>🏢 CRC Building (3 Floors)</span><span>5</span></button>
+        <button class="zone-btn" data-zone="6"><span>🎓 CRC 2nd Floor (Top)</span><span>6</span></button>
+        <button class="zone-btn" data-zone="7"><span>🏛️ GBL Building (2 Floors)</span><span>7</span></button>
+        <button class="zone-btn" data-zone="8"><span>⚽ PESCE Football Turf</span><span>8</span></button>
       </div>
 
       <div class="info-panel" id="player-info-panel">
-        <div class="info-header" id="mode-title">⚡ Techyon Twin-Quest Active</div>
+        <div class="info-header" id="mode-title">⚡ PESCE Expanded Digital Twin</div>
         <div class="info-desc">
-          Live Firebase multi-team session. Locate all <b>5 legitimate glowing Flags</b>, unlock their 4-digit PINs, and avoid decoy traps (+30s penalty).
+          Explore the reconstructed <b>AIML Department</b>, the 3-floor <b>CRC Block</b>, the 2-floor <b>GBL Block</b>, the <b>Innovation Annex</b>, and the <b>Football Turf</b>. Collect all 5 glowing flags!
         </div>
         <div class="status-box">
-          <span id="room-indicator">Zone: Entrance Portico</span>
+          <span id="room-indicator">Zone: AIML Portico</span>
           <span id="elevation-indicator">Elev: 0.0m (Ground)</span>
         </div>
         <div class="controls-legend">
-          <div><span class="kbd">WASD</span> / <span class="kbd">Arrows</span> Move &nbsp;|&nbsp; <span class="kbd">Shift</span> Run</div>
-          <div><span class="kbd">E</span> / <span class="kbd">Click</span> Interact Flag or Door &nbsp;|&nbsp; <span class="kbd">I</span> Backpack</div>
-          <div><span class="kbd">V</span> 1P/3P Camera &nbsp;|&nbsp; <span class="kbd">G</span> Spectator God-Mode</div>
+          <div><span class="kbd">WASD</span> / <span class="kbd">Arrows</span> Move &nbsp;|&nbsp; <span class="kbd">Shift</span> Sprint</div>
+          <div><span class="kbd">Mouse Drag</span> Look / Orbit 360° &nbsp;|&nbsp; <span class="kbd">1–8</span> Teleport</div>
+          <div><span class="kbd">E</span> Interact Flag / Door &nbsp;|&nbsp; <span class="kbd">I</span> Backpack &nbsp;|&nbsp; <span class="kbd">G</span> Spectator</div>
         </div>
       </div>
 
       <div id="spectator-panel">
         <div class="zone-title">
-          <span>🛰️ GOD-MODE ORTHOGRAPHIC SPECTATOR</span>
-          <span id="spec-scoring-label" style="color:#fde68a;">LIVE FIREBASE CLOUD</span>
+          <span>🛰️ GOD-MODE CAMPUS SPECTATOR</span>
+          <span style="color:#fde68a;">LIVE CLOUD</span>
         </div>
         <table class="spec-table">
           <thead>
@@ -612,22 +502,12 @@
       </div>
     </div>
 
-    <div id="mobile-controls">
-      <div class="joystick-zone" id="joystick-zone">
-        <div class="joystick-knob" id="joystick-knob"></div>
-      </div>
-      <div class="pill-group">
-        <button class="pill active" id="btn-mobile-interact">⚡ Interact (E)</button>
-        <button class="pill" id="btn-mobile-bag">🎒 Bag</button>
-      </div>
-    </div>
-
     <div class="hud-bottom">
-      <div class="status-bar" id="bottom-status-text">
-        Techyon Twin-Quest • Cloud Firestore Multi-Team Sync • PESCE AIML Department
+      <div class="status-bar">
+        PESCE Campus Digital Twin • AIML (2F) • CRC (3F) • GBL (2F) • Football Stadium • Firebase Sync
       </div>
       <div class="pill-group">
-        <button class="pill" id="btn-reset-pos">Respawn at Portico ↺</button>
+        <button class="pill" id="btn-reset-pos">Respawn at AIML Portico ↺</button>
       </div>
     </div>
   </div>
@@ -637,18 +517,8 @@
     <div class="modal-card">
       <div class="modal-badge" id="pin-modal-code">TQ-ALPHA</div>
       <div class="modal-title" id="pin-modal-title">Unlock Tachyon Flag</div>
-      <div class="modal-desc" id="pin-modal-desc">
-        Enter the 4-digit security PIN. Leading zeroes (e.g., 0047) are preserved.
-      </div>
-      <input
-        type="text"
-        id="pin-input-field"
-        class="pin-input"
-        maxlength="4"
-        inputmode="numeric"
-        placeholder="0000"
-        autocomplete="off"
-      />
+      <div class="modal-desc" id="pin-modal-desc">Enter the 4-digit security PIN.</div>
+      <input type="text" id="pin-input-field" class="pin-input" maxlength="4" inputmode="numeric" placeholder="0000" autocomplete="off" />
       <div class="modal-msg" id="pin-modal-error"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btn-pin-cancel">Cancel (Esc)</button>
@@ -657,14 +527,12 @@
     </div>
   </div>
 
-  <!-- Backpack Inventory Modal -->
+  <!-- Inventory Modal -->
   <div class="modal-backdrop" id="inventory-modal">
     <div class="modal-card">
       <div class="modal-badge">TACHYON BACKPACK INVENTORY</div>
       <div class="modal-title" id="inv-team-title">Team Backpack (0 / 5 Flags)</div>
-      <div class="modal-desc">
-        Collected flags are mounted on your 3D avatar's backpack and synchronized in Firestore.
-      </div>
+      <div class="modal-desc">Flags are mounted on your 3D backpack and synced across the campus.</div>
       <div class="inventory-grid" id="inventory-slots-container"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btn-inv-close">Close Backpack (Esc)</button>
@@ -672,14 +540,12 @@
     </div>
   </div>
 
-  <!-- Final Run Submission Modal -->
+  <!-- Submit Modal -->
   <div class="modal-backdrop" id="submit-modal">
     <div class="modal-card">
       <div class="modal-badge">AUTHORITATIVE RUN FINALIZATION</div>
       <div class="modal-title">Finalize 5/5 Twin-Quest Run?</div>
-      <div class="modal-desc">
-        All 5 flags are verified. Confirming will lock your team's completion timestamp in Firebase.
-      </div>
+      <div class="modal-desc">Confirming will lock your team's final completion time in Firebase.</div>
       <div id="submit-summary-box" style="background: rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.4); padding:12px; border-radius:10px; font-size:12.5px; line-height:1.6; margin-bottom:14px;"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="btn-submit-cancel">Cancel</button>
