@@ -13,9 +13,6 @@ export const FIREBASE_CONFIG = {
   measurementId: "G-93C0PFJ6JZ"
 };
 
-// ============================================================================
-// ARCHITECTURAL DIMENSIONS & GRID
-// ============================================================================
 export const BUILDING_DIMENSIONS = {
   totalWidth: 46.0,
   totalDepth: 11.6,
@@ -31,12 +28,11 @@ export const BUILDING_DIMENSIONS = {
   roomWidth: 10.0
 };
 
-// ============================================================================
-// COLOR PALETTE (MATCHING REAL PHOTOGRAPHS)
-// ============================================================================
 export const PALETTE = {
   facadeCream: 0xF3EFE0,
   terracottaTrim: 0xC64932,
+  crcBlueTrim: 0x1E40AF,
+  gblOchreTrim: 0xB45309,
   interiorUpper: 0xF5F2E6,
   interiorDado: 0x96999A,
   corridorTile: 0x6E564E,
@@ -47,51 +43,108 @@ export const PALETTE = {
   handrailWood: 0xDFDCD5,
   woodDoor: 0x5C3824,
   shoeRackWood: 0x3D221A,
-  signBlue: 0x1B56A8,
-  porticoPillar: 0x2A2D30,
+  signBlue: 0x1856A8,
+  porticoPillar: 0x1A1C1E,
   aluminumFrame: 0xD0D5DD,
   fireRed: 0xD92626
 };
 
 // ============================================================================
-// MANDATORY 8 ROOMS (2 FLOORS: 2 LEFT + 2 RIGHT OF CENTRAL STAIRCASE)
+// MULTI-BUILDING CAMPUS MANIFEST (AIML, CRC 3-FLOOR, GBL 2-FLOOR, ANNEX)
 // ============================================================================
-export const ROOM_MANIFEST = [
-  { id: 'G-L1', name: 'Dept. Seminar Hall & Library', code: 'GF-L1', floor: 0, side: 'LEFT', xMin: -23.0, xMax: -13.0, doorX: -19.2, type: 'classroom' },
-  { id: 'G-L2', name: 'AI Foundations Classroom G01', code: 'GF-L2', floor: 0, side: 'LEFT', xMin: -13.0, xMax: -3.0, doorX: -9.2, type: 'classroom' },
-  { id: 'G-R1', name: 'Embedded & VLSI Systems Lab', code: 'GF-R1', floor: 0, side: 'RIGHT', xMin: 3.0, xMax: 13.0, doorX: 6.8, type: 'lab' },
-  { id: 'G-R2', name: 'Department Office & HOD Chamber', code: 'GF-R2', floor: 0, side: 'RIGHT', xMin: 13.0, xMax: 23.0, doorX: 16.8, type: 'office' },
-  { id: 'F-L1', name: 'AI & Machine Learning Lab 1', code: '1F-L1', floor: 1, side: 'LEFT', xMin: -23.0, xMax: -13.0, doorX: -19.2, type: 'lab' },
-  { id: 'F-L2', name: 'Deep Learning & Vision Lab 2', code: '1F-L2', floor: 1, side: 'LEFT', xMin: -13.0, xMax: -3.0, doorX: -9.2, type: 'lab' },
-  { id: 'F-R1', name: 'Smart Classroom 101 (AIML)', code: '1F-R1', floor: 1, side: 'RIGHT', xMin: 3.0, xMax: 13.0, doorX: 6.8, type: 'classroom' },
-  { id: 'F-R2', name: 'Smart Classroom 102 (AIML)', code: '1F-R2', floor: 1, side: 'RIGHT', xMin: 13.0, xMax: 23.0, doorX: 16.8, type: 'classroom' }
+export const CAMPUS_BUILDINGS = [
+  {
+    id: 'AIML',
+    name: 'AIML & CSE Department',
+    floors: 2,
+    offsetX: 0,
+    offsetZ: 0,
+    trimColor: 0xC64932,
+    signLines: ['COMPUTER SCIENCE & ENGINEERING', '( Artificial Intelligence & Machine Learning )'],
+    subSignLines: ['DEPARTMENT OF', 'ELECTRONICS & COMMUNICATION ENGINEERING', '( VLSI DESIGN & TECHNOLOGY )'],
+    hasSolarPanels: true
+  },
+  {
+    id: 'CRC',
+    name: 'CRC Block (Central Computing & Research)',
+    floors: 3, // 3 FULL NAVIGABLE FLOORS (Ground, 1st, 2nd Floor)
+    offsetX: -66.0,
+    offsetZ: 0,
+    trimColor: 0x1D4ED8,
+    signLines: ['CRC — CENTRAL REFERENCE & COMPUTING BLOCK', '( 3-Floor Academic & Research Center )'],
+    subSignLines: ['CRC LECTURE COMPLEX', 'GROUND • FIRST • SECOND FLOOR'],
+    hasSolarPanels: true
+  },
+  {
+    id: 'GBL',
+    name: 'GBL Block (General & Golden Jubilee Labs)',
+    floors: 2, // 2 FULL NAVIGABLE FLOORS
+    offsetX: 66.0,
+    offsetZ: 0,
+    trimColor: 0xB45309,
+    signLines: ['GBL — GOLDEN JUBILEE ACADEMIC BLOCK', '( General Engineering & Science Wing )'],
+    subSignLines: ['GBL SEMINAR & LAB COMPLEX', 'PESCE MANDYA CAMPUS'],
+    hasSolarPanels: false
+  },
+  {
+    id: 'ANNEX',
+    name: 'PESCE Innovation & Placement Annex',
+    floors: 2,
+    offsetX: -66.0,
+    offsetZ: 58.0,
+    trimColor: 0x0F766E,
+    signLines: ['INNOVATION & INCUBATION ANNEX', '( Techyon Event Operations Center )'],
+    subSignLines: ['AUDITORIUM & TRAINING LABS', 'PESCE MANDYA'],
+    hasSolarPanels: false
+  }
 ];
 
+export const FOOTBALL_FIELD_CONFIG = {
+  centerX: 22.0,
+  centerZ: 64.0,
+  pitchLength: 76.0, // Along X axis
+  pitchWidth: 48.0   // Along Z axis
+};
+
+// 8 Rooms per floor template relative to each building's local origin
+export const LOCAL_FLOOR_ROOMS = [
+  { suffix: 'L1', title: 'West Wing Lab / Hall 1', xMin: -23.0, xMax: -13.0, doorX: -19.2, type: 'lab' },
+  { suffix: 'L2', title: 'West Wing Classroom 2', xMin: -13.0, xMax: -3.0, doorX: -9.2, type: 'classroom' },
+  { suffix: 'R1', title: 'East Wing Lab / Hall 3', xMin: 3.0, xMax: 13.0, doorX: 6.8, type: 'lab' },
+  { suffix: 'R2', title: 'East Wing Classroom 4', xMin: 13.0, xMax: 23.0, doorX: 16.8, type: 'classroom' }
+];
+
+// Teleport Presets (Keys 1 - 8)
 export const TELEPORT_ZONES = {
-  1: { name: 'Exterior Facade', pos: [0, 0, 22], yaw: 0, orbit: true },
-  2: { name: 'Main Entrance Portico', pos: [0, 0, 9.5], yaw: 0, orbit: false },
-  3: { name: 'Switchback Stairs', pos: [-1.4, 0, 3.6], yaw: 0, orbit: false },
-  4: { name: '1st Floor Corridor', pos: [-11.5, 4.2, 4.2], yaw: -Math.PI / 2, orbit: false },
-  5: { name: 'AI & ML Lab (F-L1)', pos: [-18.0, 4.2, -1.0], yaw: 0, orbit: false },
-  6: { name: 'Smart Classroom (F-R1)', pos: [8.0, 4.2, -1.0], yaw: 0, orbit: false }
+  1: { name: 'AIML Reference Angle', pos: [-14, 7.5, 22], yaw: 0, orbit: true, target: [2, 3.8, 0] },
+  2: { name: 'AIML Entrance Portico', pos: [0, 0, 11.5], yaw: 0, orbit: false },
+  3: { name: 'AIML Switchback Stairs', pos: [-1.4, 0, 3.6], yaw: 0, orbit: false },
+  4: { name: 'AIML 1st Floor Lab (F-L1)', pos: [-18.0, 4.2, -1.0], yaw: 0, orbit: false },
+  5: { name: 'CRC Building (3 Floors)', pos: [-66.0, 0, 14.0], yaw: 0, orbit: false },
+  6: { name: 'CRC 2nd Floor (Top Level)', pos: [-66.0, 8.4, 4.2], yaw: -Math.PI / 2, orbit: false },
+  7: { name: 'GBL Building (2 Floors)', pos: [66.0, 0, 14.0], yaw: 0, orbit: false },
+  8: { name: 'PESCE Football Turf', pos: [22.0, 0, 36.0], yaw: Math.PI, orbit: false }
 };
 
 export const QUEST_RULES = {
   totalLegitimateFlags: 5,
   decoyPenaltySeconds: 30,
-  interactionRadius: 2.5
+  interactionRadius: 2.6
 };
 
+// ============================================================================
+// 5 LEGITIMATE FLAGS + 3 DECOYS (DISTRIBUTED ACROSS AIML, CRC, GBL & TURF)
+// ============================================================================
 export const PUBLIC_FLAG_MANIFEST = [
   {
     flagId: 'FLAG-01',
     slotIndex: 0,
     code: 'TQ-ALPHA',
-    title: 'Alpha Beacon — Seminar Archive',
-    clueHint: 'Hidden behind the instructor podium in Ground Floor Dept. Seminar Hall & Library (GF-L1).',
-    roomCode: 'GF-L1',
+    title: 'Alpha Beacon — AIML Under-Stair Vault',
+    clueHint: 'Hidden under the Ground Floor central switchback staircase inside the AIML Building.',
+    roomCode: 'AIML-STAIR-GF',
     floor: 0,
-    position: [-21.4, 0.0, -4.7],
+    position: [-1.8, 0.0, -4.6],
     color: 0x00F5D4,
     kind: 'LEGITIMATE'
   },
@@ -99,11 +152,11 @@ export const PUBLIC_FLAG_MANIFEST = [
     flagId: 'FLAG-02',
     slotIndex: 1,
     code: 'TQ-BETA',
-    title: 'Beta Core — Under-Stair Vault',
-    clueHint: 'Tucked inside the Ground Floor central stairwell recess under the switchback mid-landing.',
-    roomCode: 'STAIR-GF',
-    floor: 0,
-    position: [-1.8, 0.0, -4.6],
+    title: 'Beta Core — AIML 1st Floor Lab (1F-L1)',
+    clueHint: 'Secured inside the First Floor AI & Machine Learning Lab 1 (West Wing of AIML Building).',
+    roomCode: 'AIML-1F-L1',
+    floor: 1,
+    position: [-21.4, 4.2, -4.6],
     color: 0x38BDF8,
     kind: 'LEGITIMATE'
   },
@@ -111,11 +164,11 @@ export const PUBLIC_FLAG_MANIFEST = [
     flagId: 'FLAG-03',
     slotIndex: 2,
     code: 'TQ-GAMMA',
-    title: 'Gamma Node — Silicon Testbench',
-    clueHint: 'Located at the rear workbench in Ground Floor Embedded & VLSI Systems Lab (GF-R1).',
-    roomCode: 'GF-R1',
-    floor: 0,
-    position: [11.6, 0.0, -4.8],
+    title: 'Gamma Node — CRC 2nd Floor Summit (Top Floor)',
+    clueHint: 'Climb to the 3rd level (2nd Floor, Y=8.4m) of the CRC Building and check the West Research Lab.',
+    roomCode: 'CRC-2F-L1',
+    floor: 2,
+    position: [-87.4, 8.4, -4.6],
     color: 0x10B981,
     kind: 'LEGITIMATE'
   },
@@ -123,11 +176,11 @@ export const PUBLIC_FLAG_MANIFEST = [
     flagId: 'FLAG-04',
     slotIndex: 3,
     code: 'TQ-DELTA',
-    title: 'Delta Tensor — Neural Cluster',
-    clueHint: 'Secured inside First Floor AI & Machine Learning Lab 1 (1F-L1) rear workstation bay.',
-    roomCode: '1F-L1',
+    title: 'Delta Tensor — GBL 1st Floor East Wing',
+    clueHint: 'Located inside the GBL Building First Floor East Classroom (GBL-1F-R2).',
+    roomCode: 'GBL-1F-R2',
     floor: 1,
-    position: [-21.5, 4.2, -4.6],
+    position: [87.4, 4.2, -4.6],
     color: 0xA855F7,
     kind: 'LEGITIMATE'
   },
@@ -135,44 +188,46 @@ export const PUBLIC_FLAG_MANIFEST = [
     flagId: 'FLAG-05',
     slotIndex: 4,
     code: 'TQ-OMEGA',
-    title: 'Omega Singularity — Lecture Matrix',
-    clueHint: 'Stationed in the far eastern corner of First Floor Smart Classroom 102 (1F-R2).',
-    roomCode: '1F-R2',
-    floor: 1,
-    position: [21.5, 4.2, -4.6],
+    title: 'Omega Singularity — Football Turf Center Circle',
+    clueHint: 'Positioned at the heart of the PESCE Football Turf Stadium.',
+    roomCode: 'FOOTBALL-TURF',
+    floor: 0,
+    position: [22.0, 0.0, 64.0],
     color: 0xF59E0B,
     kind: 'LEGITIMATE'
   },
+
+  // 3 Decoy Flags (+30s Penalty)
   {
     flagId: 'DECOY-01',
     code: 'DX-MIRAGE-1',
-    title: 'Unstable Signal Node (GF-L2)',
-    clueHint: 'Inspect closely: erratic crimson pulse indicates a decoy trap.',
-    roomCode: 'GF-L2',
+    title: 'Unstable Signal Node (AIML GF-R1)',
+    clueHint: 'Decoy warning: wireframe core in AIML Ground Floor East Lab.',
+    roomCode: 'AIML-GF-R1',
     floor: 0,
-    position: [-4.4, 0.0, -4.5],
+    position: [11.5, 0.0, -4.6],
     color: 0xF43F5E,
     kind: 'DECOY'
   },
   {
     flagId: 'DECOY-02',
     code: 'DX-MIRAGE-2',
-    title: 'Corridor Ghost Relay (1F-CORR)',
-    clueHint: 'Placed overtly in the First Floor west corridor end alcove.',
-    roomCode: '1F-CORR',
+    title: 'CRC 1st Floor Ghost Relay',
+    clueHint: 'Decoy warning: located in CRC 1st Floor corridor.',
+    roomCode: 'CRC-1F-CORR',
     floor: 1,
-    position: [-21.8, 4.2, 4.6],
+    position: [-87.5, 4.2, 4.5],
     color: 0xF43F5E,
     kind: 'DECOY'
   },
   {
     flagId: 'DECOY-03',
     code: 'DX-MIRAGE-3',
-    title: 'Vision Lab Phantom (1F-L2)',
-    clueHint: 'Located in Deep Learning & Vision Lab 2 (1F-L2). Wireframe core indicates decoy.',
-    roomCode: '1F-L2',
-    floor: 1,
-    position: [-4.5, 4.2, -4.6],
+    title: 'GBL Ground Floor Phantom',
+    clueHint: 'Decoy warning: located in GBL Ground Floor West Room.',
+    roomCode: 'GBL-GF-L1',
+    floor: 0,
+    position: [44.6, 0.0, -4.6],
     color: 0xF43F5E,
     kind: 'DECOY'
   }
