@@ -1,18 +1,260 @@
 // src/main.js
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { BUILDING_DIMENSIONS as DIM, PALETTE, ROOM_MANIFEST, TELEPORT_ZONES } from './config/buildingConfig.js';
+import {
+  BUILDING_DIMENSIONS as DIM,
+  PALETTE,
+  ROOM_MANIFEST,
+  TELEPORT_ZONES,
+  QUEST_RULES,
+  PUBLIC_FLAG_MANIFEST,
+  REGISTERED_TEAMS
+} from './config/buildingConfig.js';
 
 // ============================================================================
-// 1. SCENE, RENDERER & HARDWARE OPTIMIZATION (RTX 3050 4GB VRAM)
+// 1. LOCAL MOCK & FIREBASE-READY SERVICE LAYER
+// ============================================================================
+const STORAGE_KEY = 'TECHYON_TWIN_QUEST_STATE_V1';
+const CHANNEL_NAME = 'techyon_twin_quest_realtime';
+
+// Server-Authoritative 4-digit PINs (Simulates trusted Cloud Function validation)
+const DEV_SERVER_PINS = Object.freeze({
+  'FLAG-01': '0047', // Preserves leading zero
+  'FLAG-02': '1962',
+  'FLAG-03': '3084',
+  'FLAG-04': '7410',
+  'FLAG-05': '9526'
+});
+
+function createInitialTeamsState() {
+  const now = Date.now();
+  const teams = {};
+  const waypoints = [
+    [0, 0, 11.5], [-16.0, 0, 4.1], [-8.5, 0, -1.5], [8.2, 0, 4.2],
+    [17.5, 0, -2.0], [-1.4, 2.1, -4.2], [-18.0, 4.2, 4.2], [-9.0, 4.2, -1.8],
+    [7.5, 4.2, 4.2], [16.5, 4.2, -1.4], [0.0, 4.2, 4.0], [-14.0, 0, 4.2]
+  ];
+
+  REGISTERED_TEAMS.forEach((t, idx) => {
+    const wp = waypoints[idx % waypoints.length];
+    teams[t.teamId] = {
+      teamId: t.teamId,
+      teamName: t.teamName,
+      color: t.color,
+      shirtColor: t.shirtColor,
+      flagsCollected: 0,
+      collectedFlagIds: [],
+      collectionTimestamps: {},
+      penaltySeconds: 0,
+      penaltyActiveUntil: 0,
+      startedAt: now,
+      completedAt: null,
+      status: 'IN_PROGRESS',
+      position: { x: wp[0], y: wp[1], z: wp[2], yaw: 0, anim: 'IDLE' },
+      lastUpdatedAt: now
+    };
+  });
+  return { teams, createdAt: now };
+}
+
+class LocalMockGameService {
+  constructor() {
+    this.listeners = new Set();
+    this.spectatorListeners = new Set();
+    this.decoyCooldowns = new Map();
+    this.pendingLocks = new Set();
+
+    this.channel = typeof BroadcastChannel !== 'undefined'
+      ? new BroadcastChannel(CHANNEL_NAME)
+      : null;
+
+    if (this.channel) {
+      this.channel.onmessage = () => this._notify();
+    }
+    this._initStore();
+  }
+
+  _initStore() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw || !JSON.parse(raw).teams) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(createInitialTeamsState()));
+      }
+    } catch {
+      this.fallback = createInitialTeamsState();
+    }
+  }
+
+  _read() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : (this.fallback || createInitialTeamsState());
+    } catch {
+      return this.fallback || createInitialTeamsState();
+    }
+  }
+
+  _write(data) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch {
+      this.fallback = data;
+    }
+    if (this.channel) this.channel.postMessage({ ts: Date.now() });
+    this._notify();
+  }
+
+  _notify() {
+    const data = this._read();
+    for (const cb of this.listeners) cb(data);
+    const spec = this._buildSpectator(data);
+    for (const cb of this.spectatorListeners) cb(spec);
+  }
+
+  _buildSpectator(store) {
+    const now = Date.now();
+    const list = Object.values(store.teams).map((t) => {
+      const endRef = t.completedAt || now;
+      const rawSec = Math.max(0, Math.floor((endRef - t.startedAt) / 1000));
+      const effSec = rawSec + (t.penaltySeconds || 0);
+      return {
+        teamId: t.teamId,
+        teamName: t.teamName,
+        flagsCollected: t.flagsCollected,
+        penaltySeconds: t.penaltySeconds,
+        isPenaltyActive: t.penaltyActiveUntil > now,
+        status: t.status,
+        rawSec,
+        effSec,
+        position: { ...t.position }
+      };
+    });
+
+    list.sort((a, b) => (b.flagsCollected !== a.flagsCollected)
+      ? (b.flagsCollected - a.flagsCollected)
+      : (a.effSec - b.effSec));
+    return list;
+  }
+
+  subscribeTeam(teamId, cb) {
+    const fn = (store) => { if (store.teams[teamId]) cb(structuredClone(store.teams[teamId])); };
+    this.listeners.add(fn);
+    fn(this._read());
+    return () => this.listeners.delete(fn);
+  }
+
+  subscribeSpectator(cb) {
+    this.spectatorListeners.add(cb);
+    cb(this._buildSpectator(this._read()));
+    return () => this.spectatorListeners.delete(cb);
+  }
+
+  updatePosition(teamId, x, y, z, yaw, anim) {
+    const store = this._read();
+    if (!store.teams[teamId]) return;
+    store.teams[teamId].position = {
+      x: Number(x.toFixed(2)),
+      y: Number(y.toFixed(2)),
+      z: Number(z.toFixed(2)),
+      yaw: Number(yaw.toFixed(2)),
+      anim
+    };
+    store.teams[teamId].lastUpdatedAt = Date.now();
+    this._write(store);
+  }
+
+  async validateAndCollect(teamId, flagId, rawPin) {
+    const lock = `${teamId}:${flagId}`;
+    if (this.pendingLocks.has(lock)) return { ok: false, message: 'Request in progress...' };
+    this.pendingLocks.add(lock);
+
+    try {
+      await new Promise((r) => setTimeout(r, 160));
+      const pin = typeof rawPin === 'string' ? rawPin.trim() : '';
+      if (!/^\d{4}$/.test(pin)) {
+        return { ok: false, message: 'Enter an exact 4-digit numeric code (e.g., 0047).' };
+      }
+
+      const store = this._read();
+      const team = store.teams[teamId];
+      if (!team) return { ok: false, message: 'Team not found.' };
+      if (team.status === 'COMPLETED') return { ok: false, message: 'Run already completed.' };
+
+      if (team.collectedFlagIds.includes(flagId)) {
+        return { ok: false, message: 'Flag already collected in your backpack.' };
+      }
+
+      if (DEV_SERVER_PINS[flagId] !== pin) {
+        return { ok: false, message: 'Access Denied: Incorrect 4-digit PIN.' };
+      }
+
+      const now = Date.now();
+      team.collectedFlagIds.push(flagId);
+      team.flagsCollected = team.collectedFlagIds.length;
+      team.collectionTimestamps[flagId] = now;
+      this._write(store);
+
+      return {
+        ok: true,
+        flagsCollected: team.flagsCollected,
+        message: `Unlocked! Flag added to backpack (#${team.flagsCollected}/5).`
+      };
+    } finally {
+      this.pendingLocks.delete(lock);
+    }
+  }
+
+  async applyDecoy(teamId, decoyFlagId) {
+    const now = Date.now();
+    const coolKey = `${teamId}:${decoyFlagId}`;
+    if (now - (this.decoyCooldowns.get(coolKey) || 0) < 8000) {
+      return { ok: false, message: 'Decoy cooldown active.' };
+    }
+    this.decoyCooldowns.set(coolKey, now);
+
+    const store = this._read();
+    const team = store.teams[teamId];
+    if (!team || team.status === 'COMPLETED') return { ok: false, message: 'Inactive.' };
+
+    const pen = QUEST_RULES.decoyPenaltySeconds;
+    team.penaltySeconds = (team.penaltySeconds || 0) + pen;
+    const base = Math.max(now, team.penaltyActiveUntil || 0);
+    team.penaltyActiveUntil = base + pen * 1000;
+    this._write(store);
+
+    return {
+      ok: true,
+      message: `DECOY TRAP! +${pen}s penalty applied to ${team.teamName}.`
+    };
+  }
+
+  async submitRun(teamId) {
+    const store = this._read();
+    const team = store.teams[teamId];
+    if (!team) return { ok: false, message: 'Team not found.' };
+    if (team.status === 'COMPLETED') {
+      return { ok: true, message: 'Run was already completed and locked.' };
+    }
+    if (team.flagsCollected < QUEST_RULES.totalLegitimateFlags) {
+      return { ok: false, message: `Collect all 5 flags first (${team.flagsCollected}/5).` };
+    }
+
+    team.completedAt = Date.now();
+    team.status = 'COMPLETED';
+    this._write(store);
+    return { ok: true, message: 'Congratulations! 5/5 flags verified and completion locked.' };
+  }
+}
+
+const gameService = new LocalMockGameService();
+
+// ============================================================================
+// 2. SCENE, RENDERER, DUAL CAMERAS & ENVIRONMENT
 // ============================================================================
 const container = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
 
-const renderer = new THREE.WebGLRenderer({
-  antialias: true,
-  powerPreference: 'high-performance'
-});
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.shadowMap.enabled = true;
@@ -21,923 +263,906 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.08;
 container.appendChild(renderer.domElement);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 220);
-const orbitControls = new OrbitControls(camera, renderer.domElement);
+const playerCamera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 220);
+
+// Top-Down Orthographic Spectator God-Mode Camera
+const orthoSize = 30;
+const aspect = window.innerWidth / window.innerHeight;
+const spectatorCamera = new THREE.OrthographicCamera(
+  -orthoSize * aspect, orthoSize * aspect, orthoSize, -orthoSize, 1, 160
+);
+spectatorCamera.position.set(0, 65, 0.01);
+spectatorCamera.up.set(0, 0, -1);
+spectatorCamera.lookAt(0, 0, 2);
+
+const orbitControls = new OrbitControls(playerCamera, renderer.domElement);
 orbitControls.enableDamping = true;
 orbitControls.dampingFactor = 0.06;
 orbitControls.maxPolarAngle = Math.PI / 2 - 0.03;
 orbitControls.target.set(0, 3.8, 0);
 orbitControls.enabled = false;
 
-// ============================================================================
-// 2. PROCEDURAL ARCHITECTURAL TEXTURES (MATCHING UPLOADED PHOTOS)
-// ============================================================================
-function createCorridorTileTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#6A524A';
-  ctx.fillRect(0, 0, 256, 256);
-
-  // Subtle ceramic variation
-  for (let y = 0; y < 4; y++) {
-    for (let x = 0; x < 4; x++) {
-      const shade = 98 + ((x + y) % 2) * 7;
-      ctx.fillStyle = `rgb(${shade + 12}, ${shade - 10}, ${shade - 18})`;
-      ctx.fillRect(x * 64 + 2, y * 64 + 2, 60, 60);
-    }
-  }
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(22, 6);
-  return tex;
-}
-
-function createClassroomTileTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#C5C2BA';
-  ctx.fillRect(0, 0, 256, 256);
-  ctx.fillStyle = '#E2E0D8';
-  for (let y = 0; y < 4; y++) {
-    for (let x = 0; x < 4; x++) {
-      ctx.fillRect(x * 64 + 2, y * 64 + 2, 60, 60);
-    }
-  }
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(5, 4);
-  return tex;
-}
-
-function createSignboardTexture(lines, bgColor = '#18509E', textColor = '#FFFFFF') {
-  const canvas = document.createElement('canvas');
-  canvas.width = 1024;
-  canvas.height = 320;
-  const ctx = canvas.getContext('2d');
-
-  ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = '#E5E7EB';
-  ctx.lineWidth = 10;
-  ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
-
-  ctx.fillStyle = textColor;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-
-  lines.forEach((line, idx) => {
-    ctx.font = idx === 0 ? 'bold 46px Arial, sans-serif' : 'bold 34px Arial, sans-serif';
-    const yOffset = canvas.height / 2 + (idx - (lines.length - 1) / 2) * 68;
-    ctx.fillText(line, canvas.width / 2, yOffset);
-  });
-
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.needsUpdate = true;
-  return tex;
-}
-
-function createWeatheredWoodTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 64;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#E5E2DC';
-  ctx.fillRect(0, 0, 256, 64);
-  // Distressed brown wood streaks matching Photo 1 staircase handrail
-  ctx.fillStyle = '#7C6252';
-  for (let i = 0; i < 45; i++) {
-    ctx.fillRect(Math.random() * 240, Math.random() * 58, 12 + Math.random() * 35, 3);
-  }
-  return new THREE.CanvasTexture(canvas);
-}
-
-// Shared Materials
-const MAT = {
-  facadeCream: new THREE.MeshStandardMaterial({ color: PALETTE.facadeCream, roughness: 0.85 }),
-  terracotta: new THREE.MeshStandardMaterial({ color: PALETTE.terracottaTrim, roughness: 0.75 }),
-  interiorUpper: new THREE.MeshStandardMaterial({ color: PALETTE.interiorUpper, roughness: 0.85 }),
-  interiorDado: new THREE.MeshStandardMaterial({ color: PALETTE.interiorDado, roughness: 0.65 }),
-  corridorTile: new THREE.MeshStandardMaterial({ map: createCorridorTileTexture(), roughness: 0.35, metalness: 0.08 }),
-  roomTile: new THREE.MeshStandardMaterial({ map: createClassroomTileTexture(), roughness: 0.3, metalness: 0.05 }),
-  lowerGranite: new THREE.MeshStandardMaterial({ color: PALETTE.lowerStairGranite, roughness: 0.25, metalness: 0.15 }),
-  upperCement: new THREE.MeshStandardMaterial({ color: PALETTE.upperStairCement, roughness: 0.6 }),
-  railingSteel: new THREE.MeshStandardMaterial({ color: PALETTE.railingSteel, roughness: 0.4, metalness: 0.7 }),
-  handrailWood: new THREE.MeshStandardMaterial({ map: createWeatheredWoodTexture(), roughness: 0.65 }),
-  doorWood: new THREE.MeshStandardMaterial({ color: PALETTE.woodDoor, roughness: 0.5 }),
-  shoeRackWood: new THREE.MeshStandardMaterial({ color: PALETTE.shoeRackWood, roughness: 0.4 }),
-  glass: new THREE.MeshPhysicalMaterial({ color: 0x93C5FD, transparent: true, opacity: 0.36, roughness: 0.1, metalness: 0.1 }),
-  aluminum: new THREE.MeshStandardMaterial({ color: PALETTE.aluminumFrame, metalness: 0.65, roughness: 0.3 }),
-  porticoPillar: new THREE.MeshStandardMaterial({ color: PALETTE.porticoPillar, roughness: 0.3, metalness: 0.2 }),
-  copingWhite: new THREE.MeshStandardMaterial({ color: 0xF8FAFC, roughness: 0.5 })
-};
-
-// ============================================================================
-// 3. LIGHTING & SKY ENVIRONMENT
-// ============================================================================
 const ambientLight = new THREE.HemisphereLight(0xFFF7ED, 0x6B7280, 0.85);
 scene.add(ambientLight);
 
 const sunLight = new THREE.DirectionalLight(0xFFE4B5, 2.1);
 sunLight.position.set(28, 36, 32);
 sunLight.castShadow = true;
-sunLight.shadow.mapSize.width = 2048;
-sunLight.shadow.mapSize.height = 2048;
-sunLight.shadow.camera.near = 1;
-sunLight.shadow.camera.far = 110;
+sunLight.shadow.mapSize.set(2048, 2048);
 const d = 32;
 sunLight.shadow.camera.left = -d;
 sunLight.shadow.camera.right = d;
 sunLight.shadow.camera.top = d;
 sunLight.shadow.camera.bottom = -d;
-sunLight.shadow.bias = -0.0005;
 scene.add(sunLight);
 
 let isGoldenHour = true;
 function applyLightingPreset(golden) {
-  if (golden) {
-    scene.background = new THREE.Color(0xE89D54);
-    scene.fog = new THREE.FogExp2(0xE89D54, 0.0065);
-    sunLight.color.setHex(0xFFD29D);
-    sunLight.intensity = 2.1;
-    ambientLight.intensity = 0.85;
-  } else {
-    scene.background = new THREE.Color(0x87CEEB);
-    scene.fog = new THREE.FogExp2(0x87CEEB, 0.005);
-    sunLight.color.setHex(0xFFFFFF);
-    sunLight.intensity = 2.4;
-    ambientLight.intensity = 1.05;
-  }
+  scene.background = new THREE.Color(golden ? 0xE89D54 : 0x87CEEB);
+  scene.fog = new THREE.FogExp2(golden ? 0xE89D54 : 0x87CEEB, 0.0055);
+  sunLight.color.setHex(golden ? 0xFFD29D : 0xFFFFFF);
 }
 applyLightingPreset(true);
 
 // ============================================================================
-// 4. COLLISION & INTERACTION REGISTRIES
+// 3. PROCEDURAL TEXTURES & PRESERVED BUILDING GEOMETRY
 // ============================================================================
-const wallColliders = []; // Array of THREE.Box3
-const interactiveDoors = []; // Hinged door pivots
-const cutawayMeshes = []; // Front facade walls that can be toggled for inspection
+function createTileTexture(baseHex, tileHex, repsX, repsY) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = baseHex;
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = tileHex;
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 4; x++) {
+      ctx.fillRect(x * 64 + 2, y * 64 + 2, 60, 60);
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = THREE.RepeatWrapping;
+  t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(repsX, repsY);
+  return t;
+}
 
-function addBoxMesh(w, h, d, mat, x, y, z, collide = true, castShadow = true, isCutaway = false) {
-  const geom = new THREE.BoxGeometry(w, h, d);
-  const mesh = new THREE.Mesh(geom, mat);
+function createSignTexture(lines, bg = '#18509E') {
+  const c = document.createElement('canvas');
+  c.width = 1024; c.height = 320;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.strokeStyle = '#E5E7EB';
+  ctx.lineWidth = 10;
+  ctx.strokeRect(12, 12, c.width - 24, c.height - 24);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  lines.forEach((l, i) => {
+    ctx.font = i === 0 ? 'bold 44px sans-serif' : 'bold 32px sans-serif';
+    ctx.fillText(l, c.width / 2, c.height / 2 + (i - (lines.length - 1) / 2) * 66);
+  });
+  return new THREE.CanvasTexture(c);
+}
+
+const MAT = {
+  facadeCream: new THREE.MeshStandardMaterial({ color: PALETTE.facadeCream, roughness: 0.85 }),
+  terracotta: new THREE.MeshStandardMaterial({ color: PALETTE.terracottaTrim, roughness: 0.75 }),
+  interiorUpper: new THREE.MeshStandardMaterial({ color: PALETTE.interiorUpper, roughness: 0.85 }),
+  interiorDado: new THREE.MeshStandardMaterial({ color: PALETTE.interiorDado, roughness: 0.65 }),
+  corridorTile: new THREE.MeshStandardMaterial({ map: createTileTexture('#6A524A', '#7A6056', 22, 6), roughness: 0.35 }),
+  roomTile: new THREE.MeshStandardMaterial({ map: createTileTexture('#C5C2BA', '#E2E0D8', 5, 4), roughness: 0.3 }),
+  lowerGranite: new THREE.MeshStandardMaterial({ color: PALETTE.lowerStairGranite, roughness: 0.25 }),
+  upperCement: new THREE.MeshStandardMaterial({ color: PALETTE.upperStairCement, roughness: 0.6 }),
+  railingSteel: new THREE.MeshStandardMaterial({ color: PALETTE.railingSteel, roughness: 0.4, metalness: 0.7 }),
+  woodDoor: new THREE.MeshStandardMaterial({ color: PALETTE.woodDoor, roughness: 0.5 }),
+  shoeRackWood: new THREE.MeshStandardMaterial({ color: PALETTE.shoeRackWood, roughness: 0.4 }),
+  copingWhite: new THREE.MeshStandardMaterial({ color: 0xF8FAFC, roughness: 0.5 })
+};
+
+const wallColliders = [];
+const wallMeshesForOcclusion = [];
+const interactiveDoors = [];
+const cutawayMeshes = [];
+const roofMeshesForSpectator = [];
+
+function addBoxMesh(w, h, d, mat, x, y, z, collide = true, isCutaway = false, isRoof = false) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
   mesh.position.set(x, y, z);
-  mesh.castShadow = castShadow;
+  mesh.castShadow = true;
   mesh.receiveShadow = true;
   scene.add(mesh);
-
   if (collide) {
-    const box = new THREE.Box3().setFromObject(mesh);
-    wallColliders.push(box);
+    wallColliders.push(new THREE.Box3().setFromObject(mesh));
+    wallMeshesForOcclusion.push(mesh);
   }
-  if (isCutaway) {
-    cutawayMeshes.push(mesh);
-  }
+  if (isCutaway) cutawayMeshes.push(mesh);
+  if (isRoof) roofMeshesForSpectator.push(mesh);
   return mesh;
 }
 
-// Helper for two-tone interior wall (Grey Dado bottom + Cream upper)
 function addTwoToneWall(w, h, d, x, floorY, z, collide = true, isCutaway = false) {
   const dadoH = Math.min(DIM.dadoHeight, h);
   const upperH = h - dadoH;
-  addBoxMesh(w, dadoH, d, MAT.interiorDado, x, floorY + dadoH / 2, z, collide, true, isCutaway);
+  addBoxMesh(w, dadoH, d, MAT.interiorDado, x, floorY + dadoH / 2, z, collide, isCutaway);
   if (upperH > 0.01) {
-    addBoxMesh(w, upperH, d, MAT.interiorUpper, x, floorY + dadoH + upperH / 2, z, collide, true, isCutaway);
+    addBoxMesh(w, upperH, d, MAT.interiorUpper, x, floorY + dadoH + upperH / 2, z, collide, isCutaway);
   }
 }
 
-// ============================================================================
-// 5. ARCHITECTURAL RECONSTRUCTION — EXTERIOR, FLOORS, CORRIDORS & 8 ROOMS
-// ============================================================================
-function buildCampusGround() {
-  // Campus lawn
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(180, 180),
-    new THREE.MeshStandardMaterial({ color: 0x748B54, roughness: 0.95 })
-  );
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.05;
-  ground.receiveShadow = true;
-  scene.add(ground);
+function buildBuilding() {
+  // Ground plane
+  const g = new THREE.Mesh(new THREE.PlaneGeometry(180, 180), new THREE.MeshStandardMaterial({ color: 0x748B54 }));
+  g.rotation.x = -Math.PI / 2;
+  g.receiveShadow = true;
+  scene.add(g);
 
-  // Paved approach driveway with terracotta curb stripes (matching Reference UI)
-  addBoxMesh(6.5, 0.08, 22, new THREE.MeshStandardMaterial({ color: 0xEDE9E0, roughness: 0.8 }), 0, 0.0, 16.5, false);
-  addBoxMesh(0.35, 0.1, 22, MAT.terracotta, -3.25, 0.01, 16.5, false);
-  addBoxMesh(0.35, 0.1, 22, MAT.terracotta, 3.25, 0.01, 16.5, false);
+  // Approach driveway
+  addBoxMesh(6.5, 0.08, 22, new THREE.MeshStandardMaterial({ color: 0xEDE9E0 }), 0, 0, 16.5, false);
 
-  // Left-side adjacent red metal roof shed seen in Photo 2 (looking out from 1st floor corridor)
-  const shedRoof = new THREE.Mesh(
-    new THREE.BoxGeometry(14, 0.25, 9),
-    new THREE.MeshStandardMaterial({ color: 0xD94E47, roughness: 0.5 })
-  );
-  shedRoof.position.set(-32, 3.0, 4.0);
-  shedRoof.rotation.z = 0.12;
-  scene.add(shedRoof);
-
-  // Stylized campus trees on left & right
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6B4F3A, roughness: 0.9 });
-  const foliageMat = new THREE.MeshStandardMaterial({ color: 0x4E7A45, roughness: 0.8 });
-  [[-19, 13], [-14, 10], [-25, 8], [19, 13], [24, 9]].forEach(([tx, tz]) => {
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 4.5, 8), trunkMat);
-    trunk.position.set(tx, 2.25, tz);
-    scene.add(trunk);
-    const crown = new THREE.Mesh(new THREE.SphereGeometry(2.8, 12, 12), foliageMat);
-    crown.position.set(tx, 5.5, tz);
-    crown.castShadow = true;
-    scene.add(crown);
-  });
-}
-
-function buildSlabsAndCorridors() {
-  // Ground Floor Slab (Y = 0) & First Floor Slab (Y = 4.2m) & Roof Slab (Y = 8.4m)
-  // On First Floor & Roof, leave opening in Central Stair Bay (x: -3 to +3, z: -5.8 to +1.8)
+  // Slabs & Corridors
   addBoxMesh(DIM.totalWidth, 0.25, DIM.totalDepth, MAT.facadeCream, 0, -0.125, 0, false);
-
-  // First Floor Left & Right Wing Slabs
   addBoxMesh(20.0, 0.26, DIM.totalDepth, MAT.facadeCream, -13.0, DIM.floorHeight - 0.13, 0, false);
   addBoxMesh(20.0, 0.26, DIM.totalDepth, MAT.facadeCream, 13.0, DIM.floorHeight - 0.13, 0, false);
-  // First Floor Central Corridor Bridge connecting Left & Right wings in front of staircase
   addBoxMesh(6.0, 0.26, 4.0, MAT.facadeCream, 0, DIM.floorHeight - 0.13, 3.8, false);
-
-  // Vitrified Corridor Tile Overlays (Ground & First Floor)
   addBoxMesh(DIM.totalWidth - 0.4, 0.03, DIM.corridorDepth, MAT.corridorTile, 0, 0.015, 4.2, false);
   addBoxMesh(DIM.totalWidth - 0.4, 0.03, DIM.corridorDepth, MAT.corridorTile, 0, DIM.floorHeight + 0.015, 4.2, false);
+  addBoxMesh(DIM.totalWidth + 0.6, 0.3, DIM.totalDepth + 0.6, MAT.facadeCream, 0, DIM.floorHeight * 2 + 0.15, 0, false, false, true);
 
-  // Corridor Split-Level 3-Step Visual Marker & Doormat (from Photo 2)
-  const matMesh = addBoxMesh(1.6, 0.03, 0.7, new THREE.MeshStandardMaterial({ color: 0x27272A }), -3.4, DIM.floorHeight + 0.03, 4.2, false);
+  // Front Parapets & Terracotta bands
+  const zF = DIM.totalDepth / 2;
+  addBoxMesh(20.4, DIM.parapetHeight, 0.25, MAT.facadeCream, -12.8, DIM.parapetHeight / 2, zF, true, true);
+  addBoxMesh(20.4, DIM.parapetHeight, 0.25, MAT.facadeCream, 12.8, DIM.parapetHeight / 2, zF, true, true);
+  addBoxMesh(DIM.totalWidth, DIM.parapetHeight, 0.25, MAT.facadeCream, 0, DIM.floorHeight + DIM.parapetHeight / 2, zF, true, true);
 
-  // Roof Slab (Y = 8.4m)
-  addBoxMesh(DIM.totalWidth + 0.6, 0.3, DIM.totalDepth + 0.6, MAT.facadeCream, 0, DIM.floorHeight * 2 + 0.15, 0, false);
-}
-
-function buildFrontElevationAndParapets() {
-  const zFront = DIM.totalDepth / 2; // +5.8m
-
-  // 1. Ground Floor Front Parapet Wall (Leave central entrance open X: -2.6 to +2.6)
-  addBoxMesh(20.4, DIM.parapetHeight, 0.25, MAT.facadeCream, -12.8, DIM.parapetHeight / 2, zFront, true, true, true);
-  addBoxMesh(20.4, DIM.parapetHeight, 0.25, MAT.facadeCream, 12.8, DIM.parapetHeight / 2, zFront, true, true, true);
-  // Sloped white coping on Ground Parapet
-  addBoxMesh(20.4, 0.08, 0.34, MAT.copingWhite, -12.8, DIM.parapetHeight + 0.04, zFront, false, true, true);
-  addBoxMesh(20.4, 0.08, 0.34, MAT.copingWhite, 12.8, DIM.parapetHeight + 0.04, zFront, false, true, true);
-
-  // 2. First Floor Front Parapet Wall (Continuous across entire front corridor, matching Photo 2 & 3)
-  addBoxMesh(DIM.totalWidth, DIM.parapetHeight, 0.25, MAT.facadeCream, 0, DIM.floorHeight + DIM.parapetHeight / 2, zFront, true, true, true);
-  // Interior grey finish on inside of 1st floor parapet (Photo 2)
-  addBoxMesh(DIM.totalWidth - 0.2, DIM.parapetHeight - 0.05, 0.04, MAT.interiorDado, 0, DIM.floorHeight + DIM.parapetHeight / 2, zFront - 0.14, false, false, true);
-  // Sloped white coping ledge on 1st Floor Parapet (Photo 2 left side)
-  addBoxMesh(DIM.totalWidth, 0.09, 0.36, MAT.copingWhite, 0, DIM.floorHeight + DIM.parapetHeight + 0.045, zFront, false, true, true);
-
-  // 3. Upper Facade Spandrel / Header Band (Matches Photo 3 deep upper cream band)
-  addBoxMesh(DIM.totalWidth, 1.35, 0.25, MAT.facadeCream, 0, DIM.floorHeight - 0.675, zFront, false, true, true);
-  addBoxMesh(DIM.totalWidth, 1.55, 0.25, MAT.facadeCream, 0, DIM.floorHeight * 2 - 0.775, zFront, false, true, true);
-
-  // 4. Vertical Structural Columns & Terracotta Red-Oxide Pilasters (7 Grid Lines)
-  const columnXPositions = [-23.0, -13.0, -3.0, 3.0, 13.0, 23.0];
-  columnXPositions.forEach((cx) => {
-    // Structural white column
-    addBoxMesh(0.48, DIM.floorHeight * 2, 0.45, MAT.facadeCream, cx, DIM.floorHeight, zFront - 0.05, true);
-    // Terracotta vertical pilaster strip on front face (Photo 3)
-    addBoxMesh(0.24, DIM.floorHeight * 2 + 0.4, 0.08, MAT.terracotta, cx, DIM.floorHeight, zFront + 0.18, false);
+  [-23.0, -13.0, -3.0, 3.0, 13.0, 23.0].forEach((cx) => {
+    addBoxMesh(0.48, DIM.floorHeight * 2, 0.45, MAT.facadeCream, cx, DIM.floorHeight, zF - 0.05, true);
+    addBoxMesh(0.24, DIM.floorHeight * 2 + 0.4, 0.08, MAT.terracotta, cx, DIM.floorHeight, zF + 0.18, false);
   });
 
-  // Intermediate corridor window mullions (Photo 2 & 3)
-  [-18.0, -8.0, 8.0, 18.0].forEach((mx) => {
-    addBoxMesh(0.35, DIM.floorHeight * 2, 0.3, MAT.facadeCream, mx, DIM.floorHeight, zFront, false, true, true);
-    addBoxMesh(0.16, DIM.floorHeight * 2 + 0.4, 0.06, MAT.terracotta, mx, DIM.floorHeight, zFront + 0.16, false, true, true);
-  });
-
-  // 5. Horizontal Terracotta Slab Bands & Roof Coping Trim (Photo 3)
-  addBoxMesh(DIM.totalWidth + 0.4, 0.18, 0.1, MAT.terracotta, 0, DIM.parapetHeight, zFront + 0.16, false);
-  addBoxMesh(DIM.totalWidth + 0.4, 0.22, 0.12, MAT.terracotta, 0, DIM.floorHeight, zFront + 0.16, false);
-  addBoxMesh(DIM.totalWidth + 0.4, 0.18, 0.1, MAT.terracotta, 0, DIM.floorHeight + DIM.parapetHeight, zFront + 0.16, false);
-  addBoxMesh(DIM.totalWidth + 0.7, 0.26, 0.14, MAT.terracotta, 0, DIM.floorHeight * 2 + 0.25, zFront + 0.18, false);
-
-  // 6. Terracotta Rainwater Downpipes with swan-neck offsets at top (Photo 3)
-  [-6.2, 6.2, 15.5].forEach((px) => {
-    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, DIM.floorHeight * 2, 8), MAT.terracotta);
-    pipe.position.set(px, DIM.floorHeight, zFront + 0.22);
-    scene.add(pipe);
-  });
-
-  // 7. Department Signboards (Exact Match to Photo 3)
-  // Top Center Blue Signboard: "COMPUTER SCIENCE & ENGINEERING (Artificial Intelligence & Machine Learning)"
-  const aimlSignTex = createSignboardTexture([
-    'COMPUTER SCIENCE & ENGINEERING',
-    '( Artificial Intelligence & Machine Learning )'
-  ]);
-  const aimlSign = new THREE.Mesh(
+  // Department Signboard
+  const sign = new THREE.Mesh(
     new THREE.BoxGeometry(5.8, 1.55, 0.12),
-    new THREE.MeshStandardMaterial({ map: aimlSignTex, roughness: 0.4 })
+    new THREE.MeshStandardMaterial({
+      map: createSignTexture(['COMPUTER SCIENCE & ENGINEERING', '( Artificial Intelligence & Machine Learning )'])
+    })
   );
-  aimlSign.position.set(0, DIM.floorHeight * 2 - 0.78, zFront + 0.22);
-  scene.add(aimlSign);
+  sign.position.set(0, DIM.floorHeight * 2 - 0.78, zF + 0.22);
+  scene.add(sign);
 
-  // Lower Right Wing Blue Signboard: "DEPARTMENT OF ELECTRONICS & COMMUNICATION..."
-  const eceSignTex = createSignboardTexture([
-    'DEPARTMENT OF',
-    'ELECTRONICS & COMMUNICATION ENGINEERING',
-    '( VLSI DESIGN & TECHNOLOGY )'
-  ]);
-  const eceSign = new THREE.Mesh(
-    new THREE.BoxGeometry(4.2, 1.15, 0.1),
-    new THREE.MeshStandardMaterial({ map: eceSignTex, roughness: 0.4 })
-  );
-  eceSign.position.set(8.0, 2.2, zFront + 0.22);
-  scene.add(eceSign);
-}
+  // Entrance Portico
+  addBoxMesh(6.2, 0.16, 4.6, MAT.corridorTile, 0, 0.08, zF + 2.1, false);
+  addBoxMesh(0.45, 3.2, 0.45, MAT.facadeCream, -2.4, 1.6, zF + 2.2, true);
+  addBoxMesh(0.45, 3.2, 0.45, MAT.facadeCream, 2.4, 1.6, zF + 2.2, true);
 
-function buildEntrancePortico() {
-  const zFront = DIM.totalDepth / 2; // 5.8m
-  const porticoZ = zFront + 2.2;    // 8.0m
-
-  // Portico raised platform
-  addBoxMesh(6.2, 0.16, 4.6, MAT.corridorTile, 0, 0.08, zFront + 2.1, false);
-
-  // Two Dark Granite Front Pillars (Photo 3)
-  addBoxMesh(0.45, 3.2, 0.45, MAT.porticoPillar, -2.4, 1.6, porticoZ, true);
-  addBoxMesh(0.45, 3.2, 0.45, MAT.porticoPillar, 2.4, 1.6, porticoZ, true);
-
-  // Portico Pitched Gable Roof with Red-Oxide Fascia Trim (Photo 3)
-  const leftSlope = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.18, 4.8), MAT.facadeCream);
-  leftSlope.position.set(-1.5, 3.65, zFront + 2.1);
-  leftSlope.rotation.z = 0.24;
-  scene.add(leftSlope);
-
-  const rightSlope = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.18, 4.8), MAT.facadeCream);
-  rightSlope.position.set(1.5, 3.65, zFront + 2.1);
-  rightSlope.rotation.z = -0.24;
-  scene.add(rightSlope);
-
-  // Terracotta gable fascia trim
-  const leftTrim = new THREE.Mesh(new THREE.BoxGeometry(3.55, 0.22, 0.18), MAT.terracotta);
-  leftTrim.position.set(-1.5, 3.66, porticoZ + 0.35);
-  leftTrim.rotation.z = 0.24;
-  scene.add(leftTrim);
-
-  const rightTrim = new THREE.Mesh(new THREE.BoxGeometry(3.55, 0.22, 0.18), MAT.terracotta);
-  rightTrim.position.set(1.5, 3.66, porticoZ + 0.35);
-  rightTrim.rotation.z = -0.24;
-  scene.add(rightTrim);
-
-  // Portico Blue Signboard ("AUTOMOBILE ENGG. DEPARTMENT" in Kannada & English per Photo 3)
-  const autoSignTex = createSignboardTexture([
-    'ಆಟೋಮೊಬೈಲ್ ಇಂಜಿನಿಯರಿಂಗ್ ವಿಭಾಗ',
-    'AUTOMOBILE ENGG. DEPARTMENT'
-  ], '#3874B8');
-  const porticoSign = new THREE.Mesh(
-    new THREE.BoxGeometry(4.6, 0.78, 0.1),
-    new THREE.MeshStandardMaterial({ map: autoSignTex })
-  );
-  porticoSign.position.set(0, 2.95, porticoZ + 0.26);
-  scene.add(porticoSign);
-
-  // Decorative terracotta plant pots flanking the entrance (matching Reference UI)
-  [-3.2, -2.5, 2.5, 3.2, 4.5, 5.8].forEach((px) => {
-    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.18, 0.4, 10), MAT.terracotta);
-    pot.position.set(px, 0.2, zFront + 0.9);
-    scene.add(pot);
-    const bush = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 8), new THREE.MeshStandardMaterial({ color: 0x3E7B3B }));
-    bush.position.set(px, 0.5, zFront + 0.9);
-    scene.add(bush);
-  });
-}
-
-// ============================================================================
-// 6. CENTRAL SWITCHBACK STAIRCASE (EXACT MATCH TO PHOTO 1)
-// ============================================================================
-function buildCentralStaircase() {
-  // Staircase sits inside Central Bay (X: -3.0m to +3.0m, Z: -5.5m to +1.8m)
-  // Back & side enclosure walls of stairwell (Two-tone grey dado + cream upper per Photo 1)
+  // Central Switchback Staircase
   addTwoToneWall(6.0, DIM.floorHeight * 2, 0.25, 0, 0, -5.65, true);
   addTwoToneWall(0.25, DIM.floorHeight * 2, 8.2, -3.0, 0, -1.5, true);
   addTwoToneWall(0.25, DIM.floorHeight * 2, 8.2, 3.0, 0, -1.5, true);
-
-  // Mid-Landing Slab at Y = 2.1m (Z: -5.5m to -3.3m, X: -2.85m to +2.85m)
   addBoxMesh(5.7, 0.22, 2.2, MAT.lowerGranite, 0, 2.1 - 0.11, -4.4, false);
 
-  const numSteps = 10;
-  const flightRun = 4.5; // Z: +1.2m to -3.3m
-  const stepDepth = flightRun / numSteps; // 0.45m
-  const stepRise = 2.1 / numSteps;        // 0.21m
-
-  // 1. LOWER FLIGHT (Right/Left side depend on perspective; Photo 1 shows dark granite going down on right, light cement going up on left)
-  // Let's place Flight 1 (Ground Y=0 -> Mid-landing Y=2.1m) on X: +0.15m to +2.75m (Dark Granite Treads)
-  for (let i = 0; i < numSteps; i++) {
-    const stepY = (i + 0.5) * stepRise;
-    const stepZ = 1.2 - (i + 0.5) * stepDepth;
-    addBoxMesh(2.5, stepRise, stepDepth, MAT.lowerGranite, 1.45, stepY, stepZ, false);
+  const stepRise = 2.1 / 10;
+  const stepDepth = 4.5 / 10;
+  for (let i = 0; i < 10; i++) {
+    addBoxMesh(2.5, stepRise, stepDepth, MAT.lowerGranite, 1.45, (i + 0.5) * stepRise, 1.2 - (i + 0.5) * stepDepth, false);
+    addBoxMesh(2.5, stepRise, stepDepth, MAT.upperCement, -1.45, 2.1 + (i + 0.5) * stepRise, -3.3 + (i + 0.5) * stepDepth, false);
   }
 
-  // 2. UPPER FLIGHT (Mid-landing Y=2.1m -> First Floor Y=4.2m) on X: -2.75m to -0.15m (Light Grey Cement Treads)
-  for (let i = 0; i < numSteps; i++) {
-    const stepY = 2.1 + (i + 0.5) * stepRise;
-    const stepZ = -3.3 + (i + 0.5) * stepDepth;
-    addBoxMesh(2.5, stepRise, stepDepth, MAT.upperCement, -1.45, stepY, stepZ, false);
-  }
-
-  // 3. Black Metal Balusters & Weathered White Wooden Handrail (Photo 1)
-  function buildRailing(xPos, yStart, zStart, yEnd, zEnd) {
-    const posts = 9;
-    for (let i = 0; i <= posts; i++) {
-      const t = i / posts;
-      const py = THREE.MathUtils.lerp(yStart, yEnd, t);
-      const pz = THREE.MathUtils.lerp(zStart, zEnd, t);
-      addBoxMesh(0.04, 0.92, 0.04, MAT.railingSteel, xPos, py + 0.46, pz, false);
-    }
-    const dy = yEnd - yStart;
-    const dz = zEnd - zStart;
-    const length = Math.hypot(dy, dz);
-    const angle = Math.atan2(dy, dz);
-
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.07, length + 0.2), MAT.handrailWood);
-    rail.position.set(xPos, (yStart + yEnd) / 2 + 0.94, (zStart + zEnd) / 2);
-    rail.rotation.x = -angle;
-    scene.add(rail);
-  }
-
-  buildRailing(0.22, 0.1, 1.2, 2.1, -3.3);
-  buildRailing(-0.22, 2.1, -3.3, 4.2, 1.2);
-
-  // Red safety instructions board & green Fire Exit sign on stairwell wall (Photo 1 right edge)
-  addBoxMesh(0.04, 1.1, 0.75, new THREE.MeshStandardMaterial({ color: PALETTE.fireRed }), 2.84, 3.2, -1.2, false);
-  addBoxMesh(0.04, 0.22, 0.35, new THREE.MeshStandardMaterial({ color: 0x15803D }), 2.84, 4.1, -2.0, false);
-}
-
-// ============================================================================
-// 7. EIGHT ROOMS (4 GROUND, 4 FIRST FLOOR) + CORRIDOR FIXTURES & FURNITURE
-// ============================================================================
-function buildRoomsAndInteriors() {
-  const zBack = -DIM.totalDepth / 2; // -5.8m
-  const zPartition = 2.6;            // Corridor-to-room wall
-
-  // Outer Back Wall & Side Gable Walls
+  // 8 Rooms (Outer walls, partitions, doors, shoe racks, desks)
+  const zBack = -DIM.totalDepth / 2;
+  const zPart = 2.6;
   addBoxMesh(DIM.totalWidth, DIM.floorHeight * 2, 0.25, MAT.facadeCream, 0, DIM.floorHeight, zBack, true);
   addBoxMesh(0.25, DIM.floorHeight * 2, DIM.totalDepth, MAT.facadeCream, -DIM.totalWidth / 2, DIM.floorHeight, 0, true);
   addBoxMesh(0.25, DIM.floorHeight * 2, DIM.totalDepth, MAT.facadeCream, DIM.totalWidth / 2, DIM.floorHeight, 0, true);
 
-  ROOM_MANIFEST.forEach((room) => {
-    const floorY = room.floor * DIM.floorHeight;
-    const centerX = (room.xMin + room.xMax) / 2;
-    const centerZ = (zBack + zPartition) / 2; // -1.6m
+  ROOM_MANIFEST.forEach((r) => {
+    const fY = r.floor * DIM.floorHeight;
+    const cX = (r.xMin + r.xMax) / 2;
+    const cZ = (zBack + zPart) / 2;
 
-    // 1. Room Floor Tile
-    addBoxMesh(DIM.roomWidth - 0.3, 0.03, DIM.roomDepth - 0.3, MAT.roomTile, centerX, floorY + 0.02, centerZ, false);
-
-    // 2. Interior Partition Wall between rooms (at X = -13m and X = +13m)
-    if (room.xMax === -13.0 || room.xMax === 13.0) {
-      addTwoToneWall(0.22, DIM.floorHeight - 0.25, DIM.roomDepth, room.xMax, floorY, centerZ, true);
+    addBoxMesh(DIM.roomWidth - 0.3, 0.03, DIM.roomDepth - 0.3, MAT.roomTile, cX, fY + 0.02, cZ, false);
+    if (r.xMax === -13.0 || r.xMax === 13.0) {
+      addTwoToneWall(0.22, DIM.floorHeight - 0.25, DIM.roomDepth, r.xMax, fY, cZ, true);
     }
 
-    // 3. Corridor Partition Wall with Doorway Opening + Sliding Glass Window
-    const leftSegWidth = (room.doorX - DIM.doorWidth / 2) - room.xMin;
-    const rightSegWidth = room.xMax - (room.doorX + DIM.doorWidth / 2);
+    const leftW = (r.doorX - DIM.doorWidth / 2) - r.xMin;
+    const rightW = r.xMax - (r.doorX + DIM.doorWidth / 2);
+    if (leftW > 0.1) addTwoToneWall(leftW, DIM.floorHeight - 0.25, 0.24, r.xMin + leftW / 2, fY, zPart, true);
+    if (rightW > 0.1) addTwoToneWall(rightW, DIM.floorHeight - 0.25, 0.24, r.doorX + DIM.doorWidth / 2 + rightW / 2, fY, zPart, true);
 
-    if (leftSegWidth > 0.1) {
-      addTwoToneWall(leftSegWidth, DIM.floorHeight - 0.25, 0.24, room.xMin + leftSegWidth / 2, floorY, zPartition, true);
+    // Hinged Door
+    const pivot = new THREE.Group();
+    pivot.position.set(r.doorX - DIM.doorWidth / 2, fY, zPart);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(DIM.doorWidth, DIM.doorHeight, 0.06), MAT.woodDoor);
+    panel.position.set(DIM.doorWidth / 2, DIM.doorHeight / 2, 0);
+    pivot.add(panel);
+    scene.add(pivot);
+    pivot.rotation.y = -1.25;
+    interactiveDoors.push({ pivot, isOpen: true, pos: new THREE.Vector3(r.doorX, fY + 1.2, zPart), name: r.name });
+
+    // Corridor Shoe Racks & Room Furnishings
+    addBoxMesh(2.4, 0.78, 0.42, MAT.shoeRackWood, cX + 1.4, fY + 0.44, zPart + 0.35, true);
+    addBoxMesh(1.3, 0.8, 0.65, MAT.shoeRackWood, cX - 2.6, fY + 0.4, -3.5, true);
+    for (let row = 0; row < 2; row++) {
+      for (let col = 0; col < 2; col++) {
+        addBoxMesh(1.7, 0.75, 0.65, MAT.shoeRackWood, cX - 1.5 + col * 3.0, fY + 0.375, -1.8 + row * 2.1, true);
+      }
     }
-    if (rightSegWidth > 0.1) {
-      addTwoToneWall(rightSegWidth, DIM.floorHeight - 0.25, 0.24, room.doorX + DIM.doorWidth / 2 + rightSegWidth / 2, floorY, zPartition, true);
-    }
-    // Header above doorway
-    const headerH = (DIM.floorHeight - 0.25) - DIM.doorHeight;
-    addBoxMesh(DIM.doorWidth, headerH, 0.24, MAT.interiorUpper, room.doorX, floorY + DIM.doorHeight + headerH / 2, zPartition, false);
-
-    // 4. Interactive Hinged Wooden Door + Green Room Nameplate above door
-    const doorPivot = new THREE.Group();
-    doorPivot.position.set(room.doorX - DIM.doorWidth / 2, floorY, zPartition);
-    const doorPanel = new THREE.Mesh(new THREE.BoxGeometry(DIM.doorWidth, DIM.doorHeight, 0.06), MAT.doorWood);
-    doorPanel.position.set(DIM.doorWidth / 2, DIM.doorHeight / 2, 0);
-    doorPanel.castShadow = true;
-    doorPivot.add(doorPanel);
-    scene.add(doorPivot);
-
-    // Start doors slightly open (25 deg) for effortless exploration, toggleable via [E]
-    doorPivot.rotation.y = -0.55;
-    interactiveDoors.push({
-      pivot: doorPivot,
-      mesh: doorPanel,
-      isOpen: true,
-      pos: new THREE.Vector3(room.doorX, floorY + 1.2, zPartition),
-      roomName: room.name
-    });
-
-    // Green/White Room Signboard above door
-    const roomSignTex = createSignboardTexture([room.code, room.name], '#14532D', '#FFFFFF');
-    const roomSign = new THREE.Mesh(
-      new THREE.BoxGeometry(1.5, 0.42, 0.05),
-      new THREE.MeshStandardMaterial({ map: roomSignTex })
-    );
-    roomSign.position.set(room.doorX, floorY + DIM.doorHeight + 0.35, zPartition + 0.15);
-    scene.add(roomSign);
-
-    // 5. Aluminum-Framed Corridor Window (Photo 2 right wall)
-    const winX = centerX + 1.4;
-    addBoxMesh(2.2, 1.35, 0.28, MAT.aluminum, winX, floorY + 1.95, zPartition, false);
-    addBoxMesh(2.05, 1.2, 0.3, MAT.glass, winX, floorY + 1.95, zPartition, false);
-
-    // 6. Corridor Shoe Rack Cubbies outside Labs/Classrooms (Photo 2 right wall)
-    const rackX = centerX + 1.4;
-    const rackZ = zPartition + 0.35;
-    addBoxMesh(2.4, 0.78, 0.42, MAT.shoeRackWood, rackX, floorY + 0.44, rackZ, true);
-
-    // 7. Wall-Mounted Red Fire Extinguisher (Photo 2)
-    const ext = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.48, 10), new THREE.MeshStandardMaterial({ color: PALETTE.fireRed }));
-    ext.position.set(room.doorX + 0.95, floorY + 1.4, zPartition + 0.18);
-    scene.add(ext);
-
-    // 8. Modular Room Interior Furnishings (Labs vs Classrooms)
-    populateRoomInterior(room, floorY, centerX, centerZ);
   });
 }
+buildBuilding();
 
-function populateRoomInterior(room, floorY, centerX, centerZ) {
-  // Ceiling LED Tube Lights
-  const roomLight = new THREE.PointLight(0xFFFBEB, 0.85, 11);
-  roomLight.position.set(centerX, floorY + 3.6, centerZ);
-  scene.add(roomLight);
+// ============================================================================
+// 4. ARTICULATED HUMAN CHARACTER WITH SKELETON & 3D BACKPACK
+// ============================================================================
+class ArticulatedHumanCharacter {
+  constructor(opt = {}) {
+    this.shirtColor = opt.shirtColor || 0x0D9488;
+    this.accentColor = opt.accentColor || 0x14B8A6;
+    this.root = new THREE.Group();
+    this.pelvis = new THREE.Group();
+    this.pelvis.position.y = 0.94;
+    this.root.add(this.pelvis);
 
-  // Blackboard / Smart Display on Side/Back Wall
-  const board = new THREE.Mesh(
-    new THREE.BoxGeometry(4.2, 1.5, 0.08),
-    new THREE.MeshStandardMaterial({ color: room.type === 'lab' ? 0x0F172A : 0x1E3A2F, roughness: 0.3 })
-  );
-  board.position.set(centerX, floorY + 2.1, -5.55);
-  scene.add(board);
+    this.joints = {};
+    this.backpackSlots = [];
+    this.animClock = Math.random() * 10;
+    this.blendWeight = 0;
 
-  // Podium / Instructor Desk
-  addBoxMesh(1.4, 0.8, 0.7, MAT.shoeRackWood, centerX - 2.8, floorY + 0.4, -4.2, true);
+    this._initMaterials();
+    this._initSkeleton();
+    this._initBackpack();
+  }
 
-  // Student Desks / Computer Workstations (2 rows x 3 columns)
-  const deskMat = new THREE.MeshStandardMaterial({ color: 0xC89D66, roughness: 0.6 });
-  const monitorMat = new THREE.MeshStandardMaterial({ color: 0x1E293B, roughness: 0.3 });
+  _initMaterials() {
+    this.mat = {
+      skin: new THREE.MeshStandardMaterial({ color: 0xE0AC8B, roughness: 0.65 }),
+      hair: new THREE.MeshStandardMaterial({ color: 0x1E1B18 }),
+      shirt: new THREE.MeshStandardMaterial({ color: this.shirtColor, roughness: 0.7 }),
+      pants: new THREE.MeshStandardMaterial({ color: 0x1E293B, roughness: 0.8 }),
+      pack: new THREE.MeshStandardMaterial({ color: 0x1F2937, roughness: 0.6 }),
+      packTrim: new THREE.MeshStandardMaterial({ color: this.accentColor, emissive: this.accentColor, emissiveIntensity: 0.5 })
+    };
+  }
 
-  for (let row = 0; row < 2; row++) {
-    for (let col = 0; col < 3; col++) {
-      const dx = centerX - 2.6 + col * 2.6;
-      const dz = -2.2 + row * 2.3;
-      addBoxMesh(1.8, 0.75, 0.7, deskMat, dx, floorY + 0.375, dz, true);
+  _initSkeleton() {
+    const hips = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.22), this.mat.pants);
+    hips.castShadow = true;
+    this.pelvis.add(hips);
 
-      if (room.type === 'lab') {
-        // Dual Monitors on Lab Desks
-        addBoxMesh(0.52, 0.36, 0.05, monitorMat, dx - 0.42, floorY + 0.95, dz - 0.15, false);
-        addBoxMesh(0.52, 0.36, 0.05, monitorMat, dx + 0.42, floorY + 0.95, dz - 0.15, false);
+    this.joints.spine = new THREE.Group();
+    this.joints.spine.position.y = 0.08;
+    this.pelvis.add(this.joints.spine);
+
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.48, 0.24), this.mat.shirt);
+    torso.position.y = 0.24;
+    torso.castShadow = true;
+    this.joints.spine.add(torso);
+
+    // Head, Eyes & Face
+    this.joints.head = new THREE.Group();
+    this.joints.head.position.y = 0.54;
+    this.joints.spine.add(this.joints.head);
+
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.24, 0.22), this.mat.skin);
+    head.position.y = 0.12;
+    head.castShadow = true;
+    this.joints.head.add(head);
+
+    const hair = new THREE.Mesh(new THREE.BoxGeometry(0.23, 0.08, 0.23), this.mat.hair);
+    hair.position.y = 0.22;
+    this.joints.head.add(hair);
+
+    [-0.05, 0.05].forEach((ex) => {
+      const eye = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.02, 0.015), new THREE.MeshBasicMaterial({ color: 0x111827 }));
+      eye.position.set(ex, 0.14, -0.114);
+      this.joints.head.add(eye);
+    });
+
+    // Arms
+    ['Left', 'Right'].forEach((side) => {
+      const sX = side === 'Left' ? -0.24 : 0.24;
+      const sh = new THREE.Group();
+      sh.position.set(sX, 0.44, 0);
+      this.joints.spine.add(sh);
+      this.joints[`arm${side}`] = sh;
+
+      const upper = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.24, 0.09), this.mat.skin);
+      upper.position.y = -0.12;
+      sh.add(upper);
+
+      const el = new THREE.Group();
+      el.position.y = -0.24;
+      sh.add(el);
+      this.joints[`elbow${side}`] = el;
+
+      const lower = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.24, 0.08), this.mat.skin);
+      lower.position.y = -0.12;
+      el.add(lower);
+    });
+
+    // Legs
+    ['Left', 'Right'].forEach((side) => {
+      const hX = side === 'Left' ? -0.1 : 0.1;
+      const hip = new THREE.Group();
+      hip.position.set(hX, -0.04, 0);
+      this.pelvis.add(hip);
+      this.joints[`hip${side}`] = hip;
+
+      const thigh = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.42, 0.14), this.mat.pants);
+      thigh.position.y = -0.21;
+      thigh.castShadow = true;
+      hip.add(thigh);
+
+      const kn = new THREE.Group();
+      kn.position.y = -0.42;
+      hip.add(kn);
+      this.joints[`knee${side}`] = kn;
+
+      const shin = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.40, 0.12), this.mat.pants);
+      shin.position.y = -0.20;
+      kn.add(shin);
+
+      const foot = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.22), new THREE.MeshStandardMaterial({ color: 0xF8FAFC }));
+      foot.position.set(0, -0.44, -0.04);
+      kn.add(foot);
+    });
+  }
+
+  _initBackpack() {
+    const pack = new THREE.Group();
+    pack.position.set(0, 0.24, 0.18);
+    this.joints.spine.add(pack);
+
+    const mainBody = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.38, 0.16), this.mat.pack);
+    pack.add(mainBody);
+
+    const led = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.03, 0.015), this.mat.packTrim);
+    led.position.set(0, 0.12, 0.085);
+    pack.add(led);
+
+    // 5 Physical Flag Holster Slots on Backpack
+    for (let i = 0; i < 5; i++) {
+      const slotX = (i - 2) * 0.06;
+      const miniFlag = new THREE.Group();
+      miniFlag.position.set(slotX, 0.22, 0);
+      miniFlag.visible = false;
+
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.32), new THREE.MeshStandardMaterial({ color: 0xE2E8F0 }));
+      pole.position.y = 0.16;
+      miniFlag.add(pole);
+
+      const pennant = new THREE.Mesh(
+        new THREE.BoxGeometry(0.12, 0.08, 0.012),
+        new THREE.MeshStandardMaterial({ color: PUBLIC_FLAG_MANIFEST[i].color, emissive: PUBLIC_FLAG_MANIFEST[i].color, emissiveIntensity: 0.8 })
+      );
+      pennant.position.set(0.06, 0.26, 0);
+      miniFlag.add(pennant);
+
+      pack.add(miniFlag);
+      this.backpackSlots.push({ flagId: PUBLIC_FLAG_MANIFEST[i].flagId, group: miniFlag });
+    }
+  }
+
+  syncInventory(collectedIds = []) {
+    const s = new Set(collectedIds);
+    this.backpackSlots.forEach((slot) => {
+      slot.group.visible = s.has(slot.flagId);
+    });
+  }
+
+  update(dt, speed, onStairs) {
+    this.animClock += dt;
+    const isMoving = speed > 0.2;
+    const targetW = isMoving ? (speed > 6.5 ? 1.3 : 0.85) : 0;
+    this.blendWeight = THREE.MathUtils.lerp(this.blendWeight, targetW, dt * 10);
+
+    const freq = isMoving ? 8.5 : 2.2;
+    const p = this.animClock * freq;
+    const sin = Math.sin(p);
+    const w = this.blendWeight;
+
+    // Breathing & Locomotion
+    this.joints.spine.rotation.x = Math.sin(this.animClock * 2.2) * 0.02 + w * 0.08;
+    this.pelvis.position.y = 0.94 + Math.abs(Math.cos(p)) * 0.04 * w;
+
+    this.joints.hipLeft.rotation.x = sin * 0.6 * w;
+    this.joints.hipRight.rotation.x = -sin * 0.6 * w;
+    this.joints.kneeLeft.rotation.x = -Math.max(0, -sin) * 0.9 * w;
+    this.joints.kneeRight.rotation.x = -Math.max(0, sin) * 0.9 * w;
+
+    this.joints.armLeft.rotation.x = -sin * 0.5 * w;
+    this.joints.armRight.rotation.x = sin * 0.5 * w;
+  }
+}
+
+// ============================================================================
+// 5. GLOWING FLAGS & DECOYS SYSTEM
+// ============================================================================
+class FlagSystem {
+  constructor(scene, wallMeshes) {
+    this.scene = scene;
+    this.wallMeshes = wallMeshes;
+    this.raycaster = new THREE.Raycaster();
+    this.nodes = new Map();
+    this.clock = 0;
+    this._init();
+  }
+
+  _init() {
+    PUBLIC_FLAG_MANIFEST.forEach((m) => {
+      const g = new THREE.Group();
+      g.position.set(m.position[0], m.position[1], m.position[2]);
+
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.4, 0.14, 6), MAT.lowerGranite);
+      base.position.y = 0.07;
+      g.add(base);
+
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.85), new THREE.MeshStandardMaterial({ color: 0xE2E8F0, emissive: m.color, emissiveIntensity: 0.3 }));
+      pole.position.y = 0.98;
+      g.add(pole);
+
+      const banner = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.75, 0.45),
+        new THREE.MeshStandardMaterial({ color: m.color, emissive: m.color, emissiveIntensity: 0.8, side: THREE.DoubleSide })
+      );
+      banner.position.set(0.4, 1.55, 0);
+      g.add(banner);
+
+      const light = new THREE.PointLight(m.color, 1.2, 4.2);
+      light.position.set(0, 1.5, 0);
+      g.add(light);
+
+      this.scene.add(g);
+      this.nodes.set(m.flagId, { meta: m, group: g, banner, light, isCollected: false });
+    });
+  }
+
+  syncCollected(collectedIds = []) {
+    const s = new Set(collectedIds);
+    for (const [id, n] of this.nodes.entries()) {
+      if (n.meta.kind === 'LEGITIMATE') {
+        n.isCollected = s.has(id);
+        n.group.visible = !n.isCollected;
       }
+    }
+  }
+
+  findInteractable(playerPos) {
+    const eye = new THREE.Vector3(playerPos.x, playerPos.y + 1.2, playerPos.z);
+    for (const n of this.nodes.values()) {
+      if (n.isCollected || !n.group.visible) continue;
+      if (Math.abs(n.meta.position[1] - playerPos.y) > 1.5) continue;
+      const target = new THREE.Vector3(n.meta.position[0], n.meta.position[1] + 1.1, n.meta.position[2]);
+      const dist = eye.distanceTo(target);
+      if (dist <= QUEST_RULES.interactionRadius) {
+        this.raycaster.set(eye, target.clone().sub(eye).normalize());
+        this.raycaster.far = dist - 0.15;
+        if (this.raycaster.intersectObjects(this.wallMeshes, false).length === 0) {
+          return n.meta;
+        }
+      }
+    }
+    return null;
+  }
+
+  setSpectator(isSpec) {
+    for (const n of this.nodes.values()) {
+      n.group.visible = isSpec ? false : !n.isCollected;
+    }
+  }
+
+  update(dt) {
+    this.clock += dt;
+    for (const n of this.nodes.values()) {
+      if (!n.group.visible) continue;
+      n.banner.rotation.y = Math.sin(this.clock * 3.5) * 0.15;
+      n.light.intensity = 1.0 + Math.sin(this.clock * 4.0) * 0.3;
     }
   }
 }
 
-function buildRooftopSolarAndPenthouse() {
-  const roofY = DIM.floorHeight * 2 + 0.3;
-
-  // Central Staircase Penthouse Headroom Tower (Seen in Photo 3 & Reference UI)
-  addBoxMesh(6.2, 2.8, 5.5, MAT.facadeCream, 0, roofY + 1.4, -2.5, false);
-
-  // Rooftop Solar Panel Arrays on Left & Right Wings (Photo 3 & Reference UI)
-  const solarMat = new THREE.MeshStandardMaterial({ color: 0x1E3A5F, metalness: 0.6, roughness: 0.25 });
-  [-16, -11, 7, 12, 17].forEach((sx) => {
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.1, 2.2), solarMat);
-    panel.position.set(sx, roofY + 0.55, 2.8);
-    panel.rotation.x = 0.28;
-    scene.add(panel);
-  });
-}
-
-// Build complete architectural scene
-buildCampusGround();
-buildSlabsAndCorridors();
-buildFrontElevationAndParapets();
-buildEntrancePortico();
-buildCentralStaircase();
-buildRoomsAndInteriors();
-buildRooftopSolarAndPenthouse();
+const flagSystem = new FlagSystem(scene, wallMeshesForOcclusion);
 
 // ============================================================================
-// 8. PLAYER AVATAR, 1P/3P CAMERA, COLLISION & STAIR TRAVERSAL ENGINE
+// 6. ACTIVE PLAYER, CAMERA LOOP & SPECTATOR TEAMS
 // ============================================================================
+let activeTeamId = REGISTERED_TEAMS[0].teamId;
+let currentTeamState = null;
+
 const player = {
-  pos: new THREE.Vector3(0, 0, 12.5),
-  vel: new THREE.Vector3(),
+  pos: new THREE.Vector3(0, 0, 9.5),
   yaw: 0,
   pitch: -0.08,
-  speed: 5.5,
+  speed: 5.4,
   sprintMultiplier: 1.65,
-  radius: 0.38,
+  radius: 0.36,
   thirdPerson: true,
+  spectatorMode: false,
   orbitMode: false
 };
 
-// Stylized Player Avatar for 3rd-Person Mode
-const avatarGroup = new THREE.Group();
-const bodyMesh = new THREE.Mesh(
-  new THREE.CapsuleGeometry(0.28, 0.85, 8, 16),
-  new THREE.MeshStandardMaterial({ color: 0x3B82F6, roughness: 0.4 })
-);
-bodyMesh.position.y = 0.72;
-bodyMesh.castShadow = true;
-avatarGroup.add(bodyMesh);
+const playerAvatar = new ArticulatedHumanCharacter({
+  shirtColor: REGISTERED_TEAMS[0].shirtColor,
+  accentColor: REGISTERED_TEAMS[0].color
+});
+scene.add(playerAvatar.root);
 
-const headMesh = new THREE.Mesh(
-  new THREE.SphereGeometry(0.22, 16, 16),
-  new THREE.MeshStandardMaterial({ color: 0xFDE68A, roughness: 0.5 })
-);
-headMesh.position.y = 1.45;
-avatarGroup.add(headMesh);
-scene.add(avatarGroup);
+// Spectator Marker Sprite
+function createMarkerSprite(label, hex) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+  ctx.fillRect(8, 16, 496, 96);
+  ctx.strokeStyle = `#${hex.toString(16).padStart(6, '0')}`;
+  ctx.lineWidth = 8;
+  ctx.strokeRect(8, 16, 496, 96);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 34px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, 256, 64);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+  s.position.set(0, 2.35, 0);
+  s.scale.set(2.8, 0.7, 1);
+  return s;
+}
 
-// Keyboard & Mouse Input
+const otherTeamNodes = new Map();
+REGISTERED_TEAMS.forEach((t) => {
+  const char = new ArticulatedHumanCharacter({ shirtColor: t.shirtColor, accentColor: t.color });
+  char.root.add(createMarkerSprite(t.teamName.split('•')[1].trim(), t.color));
+  scene.add(char.root);
+  otherTeamNodes.set(t.teamId, char);
+});
+
+// ============================================================================
+// 7. HUD, MODALS & INPUT HANDLERS
+// ============================================================================
+const teamSelEl = document.getElementById('team-selector');
+const flagCountEl = document.getElementById('hud-flag-counter');
+const timerEl = document.getElementById('hud-timer');
+const penaltyEl = document.getElementById('penalty-banner');
+const submitBtn = document.getElementById('btn-submit-run');
+const toastEl = document.getElementById('interaction-toast');
+const feedbackEl = document.getElementById('feedback-banner');
+
+const pinModal = document.getElementById('pin-modal');
+const pinInput = document.getElementById('pin-input-field');
+const pinError = document.getElementById('pin-modal-error');
+const pinSubmitBtn = document.getElementById('btn-pin-submit');
+const invModal = document.getElementById('inventory-modal');
+const submitModal = document.getElementById('submit-modal');
+let activeFlagForPin = null;
+
+function showBanner(text, border = '#38bdf8') {
+  feedbackEl.textContent = text;
+  feedbackEl.style.borderColor = border;
+  feedbackEl.style.opacity = '1';
+  clearTimeout(showBanner._t);
+  showBanner._t = setTimeout(() => { feedbackEl.style.opacity = '0'; }, 3000);
+}
+
+function formatSec(s) {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+REGISTERED_TEAMS.forEach((t) => {
+  const opt = document.createElement('option');
+  opt.value = t.teamId;
+  opt.textContent = t.teamName;
+  teamSelEl.appendChild(opt);
+});
+
+let unsubTeam = null;
+function bindTeam(teamId) {
+  activeTeamId = teamId;
+  if (unsubTeam) unsubTeam();
+  const cfg = REGISTERED_TEAMS.find((t) => t.teamId === teamId);
+  if (cfg) {
+    playerAvatar.mat.shirt.color.setHex(cfg.shirtColor);
+    playerAvatar.mat.packTrim.color.setHex(cfg.color);
+    playerAvatar.mat.packTrim.emissive.setHex(cfg.color);
+  }
+
+  unsubTeam = gameService.subscribeTeam(teamId, (state) => {
+    currentTeamState = state;
+    flagCountEl.textContent = `🚩 Flags: ${state.flagsCollected} / 5`;
+    submitBtn.style.display = state.flagsCollected >= 5 ? 'inline-flex' : 'none';
+    playerAvatar.syncInventory(state.collectedFlagIds);
+    flagSystem.syncCollected(state.collectedFlagIds);
+  });
+}
+teamSelEl.addEventListener('change', (e) => bindTeam(e.target.value));
+bindTeam(activeTeamId);
+
+// PIN Modal
+function openPin(meta) {
+  activeFlagForPin = meta;
+  document.getElementById('pin-modal-code').textContent = `${meta.code} • ${meta.roomCode}`;
+  document.getElementById('pin-modal-title').textContent = meta.title;
+  document.getElementById('pin-modal-desc').textContent = meta.clueHint;
+  pinInput.value = '';
+  pinError.textContent = '';
+  pinModal.classList.add('open');
+  setTimeout(() => pinInput.focus(), 30);
+}
+
+pinInput.addEventListener('input', () => {
+  pinInput.value = pinInput.value.replace(/\D/g, '').slice(0, 4);
+});
+
+pinSubmitBtn.addEventListener('click', async () => {
+  if (!activeFlagForPin) return;
+  const res = await gameService.validateAndCollect(activeTeamId, activeFlagForPin.flagId, pinInput.value);
+  if (!res.ok) {
+    pinError.textContent = res.message;
+  } else {
+    pinModal.classList.remove('open');
+    showBanner(res.message, '#10b981');
+  }
+});
+document.getElementById('btn-pin-cancel').addEventListener('click', () => pinModal.classList.remove('open'));
+
+// Inventory Modal
+function openInventory() {
+  if (!currentTeamState) return;
+  document.getElementById('inv-team-title').textContent = `${currentTeamState.teamName} (${currentTeamState.flagsCollected}/5)`;
+  const c = document.getElementById('inventory-slots-container');
+  c.innerHTML = '';
+  PUBLIC_FLAG_MANIFEST.filter((f) => f.kind === 'LEGITIMATE').forEach((f, i) => {
+    const col = currentTeamState.collectedFlagIds.includes(f.flagId);
+    const div = document.createElement('div');
+    div.className = `inv-slot ${col ? 'collected' : ''}`;
+    div.innerHTML = `
+      <div><b>Slot #${i + 1}: ${f.code}</b> — ${f.title}</div>
+      <div style="color:${col ? '#34d399' : '#64748b'}; font-weight:700;">${col ? '✅ IN BACKPACK' : '🔒 LOCKED'}</div>
+    `;
+    c.appendChild(div);
+  });
+  invModal.classList.add('open');
+}
+document.getElementById('btn-backpack').addEventListener('click', openInventory);
+document.getElementById('btn-inv-close').addEventListener('click', () => invModal.classList.remove('open'));
+
+// Submit Run Modal
+submitBtn.addEventListener('click', () => {
+  if (!currentTeamState) return;
+  const raw = Math.floor((Date.now() - currentTeamState.startedAt) / 1000);
+  const pen = currentTeamState.penaltySeconds || 0;
+  document.getElementById('submit-summary-box').innerHTML = `
+    <div><b>Team:</b> ${currentTeamState.teamName}</div>
+    <div><b>Flags:</b> ${currentTeamState.flagsCollected} / 5</div>
+    <div><b>Raw Time:</b> ${formatSec(raw)} | <b>Penalties:</b> +${pen}s</div>
+    <div><b>Final Time:</b> <span style="color:#34d399; font-weight:700;">${formatSec(raw + pen)}</span></div>
+  `;
+  submitModal.classList.add('open');
+});
+document.getElementById('btn-submit-confirm').addEventListener('click', async () => {
+  const res = await gameService.submitRun(activeTeamId);
+  submitModal.classList.remove('open');
+  showBanner(res.message, res.ok ? '#10b981' : '#f43f5e');
+});
+document.getElementById('btn-submit-cancel').addEventListener('click', () => submitModal.classList.remove('open'));
+
+// Primary Interaction (Flags, Decoys, Doors)
+async function interact() {
+  if (pinModal.classList.contains('open') || invModal.classList.contains('open')) return;
+  const f = flagSystem.findInteractable(player.pos);
+  if (f) {
+    if (f.kind === 'DECOY') {
+      const res = await gameService.applyDecoy(activeTeamId, f.flagId);
+      showBanner(res.message, '#f43f5e');
+    } else {
+      openPin(f);
+    }
+    return;
+  }
+  const d = interactiveDoors.find((door) => door.pos.distanceTo(player.pos) < 2.3);
+  if (d) {
+    d.isOpen = !d.isOpen;
+    d.pivot.rotation.y = d.isOpen ? -1.35 : 0;
+  }
+}
+
+// Spectator God-Mode Toggle
+function toggleSpectator() {
+  player.spectatorMode = !player.spectatorMode;
+  document.getElementById('btn-spectator').classList.toggle('active', player.spectatorMode);
+  document.getElementById('spectator-panel').style.display = player.spectatorMode ? 'block' : 'none';
+  document.getElementById('player-info-panel').style.display = player.spectatorMode ? 'none' : 'block';
+  roofMeshesForSpectator.forEach((m) => { m.visible = !player.spectatorMode; });
+  flagSystem.setSpectator(player.spectatorMode);
+}
+document.getElementById('btn-spectator').addEventListener('click', toggleSpectator);
+
+gameService.subscribeSpectator((list) => {
+  const tb = document.getElementById('spectator-tbody');
+  tb.innerHTML = '';
+  list.forEach((item, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="color:#38bdf8; font-weight:700;">#${idx + 1}</td>
+      <td>${item.teamName.replace(/^Team \d+ • /, '')}</td>
+      <td style="color:${item.flagsCollected === 5 ? '#10b981' : '#fff'}; font-weight:700;">${item.flagsCollected}/5</td>
+      <td style="color:${item.penaltySeconds > 0 ? '#f43f5e' : '#94a3b8'};">+${item.penaltySeconds}s</td>
+      <td>${item.status === 'COMPLETED' ? `✅ ${formatSec(item.effSec)}` : formatSec(item.effSec)}</td>
+    `;
+    tb.appendChild(tr);
+
+    const c = otherTeamNodes.get(item.teamId);
+    if (c) {
+      if (item.teamId === activeTeamId && !player.spectatorMode) {
+        c.root.visible = false;
+      } else {
+        c.root.visible = true;
+        c.root.position.set(item.position.x, item.position.y, item.position.z);
+        c.root.rotation.y = item.position.yaw || 0;
+      }
+    }
+  });
+});
+
+// Controls & Movement
 const keys = {};
 window.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape') {
+    pinModal.classList.remove('open');
+    invModal.classList.remove('open');
+    submitModal.classList.remove('open');
+  }
+  if (pinModal.classList.contains('open') && e.code === 'Enter') {
+    pinSubmitBtn.click();
+    return;
+  }
   keys[e.code] = true;
-  if (e.code === 'KeyV') toggleViewMode();
-  if (e.code === 'KeyE') interactNearestDoor();
-  if (e.code === 'KeyC') toggleCutaway();
+  if (e.code === 'KeyE') interact();
+  if (e.code === 'KeyI') openInventory();
+  if (e.code === 'KeyG') toggleSpectator();
+  if (e.code === 'KeyV') {
+    player.thirdPerson = !player.thirdPerson;
+    playerAvatar.root.visible = player.thirdPerson;
+    document.getElementById('btn-view-mode').textContent = player.thirdPerson ? '🚶 View: 3rd Person' : '👁️ View: 1st Person';
+  }
   if (['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6'].includes(e.code)) {
-    teleportToZone(Number(e.code.replace('Digit', '')));
+    const z = TELEPORT_ZONES[Number(e.code.replace('Digit', ''))];
+    if (z) {
+      player.pos.set(z.pos[0], z.pos[1], z.pos[2]);
+      player.yaw = z.yaw;
+    }
   }
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
-let isDraggingLook = false;
-let prevMouse = { x: 0, y: 0 };
-renderer.domElement.addEventListener('mousedown', (e) => {
-  if (player.orbitMode) return;
-  isDraggingLook = true;
-  prevMouse = { x: e.clientX, y: e.clientY };
-});
-window.addEventListener('mouseup', () => { isDraggingLook = false; });
+let isDrag = false, prevM = { x: 0, y: 0 };
+renderer.domElement.addEventListener('mousedown', (e) => { isDrag = true; prevM = { x: e.clientX, y: e.clientY }; });
+window.addEventListener('mouseup', () => { isDrag = false; });
 window.addEventListener('mousemove', (e) => {
-  if (!isDraggingLook || player.orbitMode) return;
-  const dx = e.clientX - prevMouse.x;
-  const dy = e.clientY - prevMouse.y;
-  prevMouse = { x: e.clientX, y: e.clientY };
-  player.yaw -= dx * 0.0045;
-  player.pitch = THREE.MathUtils.clamp(player.pitch - dy * 0.0035, -0.85, 0.85);
+  if (!isDrag || player.spectatorMode || player.orbitMode) return;
+  player.yaw -= (e.clientX - prevM.x) * 0.0045;
+  player.pitch = THREE.MathUtils.clamp(player.pitch - (e.clientY - prevM.y) * 0.0035, -0.85, 0.85);
+  prevM = { x: e.clientX, y: e.clientY };
 });
 
-// Mobile Virtual Joystick
-const joyZone = document.getElementById('joystick-zone');
-const joyKnob = document.getElementById('joystick-knob');
-let joyVec = { x: 0, y: 0 };
-
-joyZone.addEventListener('touchmove', (e) => {
-  e.preventDefault();
-  const touch = e.touches[0];
-  const rect = joyZone.getBoundingClientRect();
-  const cx = rect.left + rect.width / 2;
-  const cy = rect.top + rect.height / 2;
-  const maxR = 36;
-  let dx = touch.clientX - cx;
-  let dy = touch.clientY - cy;
-  const dist = Math.hypot(dx, dy);
-  if (dist > maxR) {
-    dx = (dx / dist) * maxR;
-    dy = (dy / dist) * maxR;
-  }
-  joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
-  joyVec.x = dx / maxR;
-  joyVec.y = dy / maxR;
-});
-joyZone.addEventListener('touchend', () => {
-  joyKnob.style.transform = 'translate(0px, 0px)';
-  joyVec = { x: 0, y: 0 };
-});
-
-// Exact Elevation & Switchback Staircase Heightfield Solver
-function computeTargetFloorHeight(x, z, currentY) {
-  // 1. Inside Central Stair Bay (X: -2.85m to +2.85m)
+function computeHeight(x, z, curY) {
   if (x >= -2.85 && x <= 2.85) {
-    // Mid-landing (Z: -5.6m to -3.3m)
-    if (z >= -5.6 && z <= -3.3 && currentY >= 1.1 && currentY <= 3.2) {
-      return 2.1;
-    }
-    // Lower Flight (Right side X >= 0, Z: -3.3m to +1.2m) -> Ground (0m) to Mid-Landing (2.1m)
-    if (x >= 0.0 && z >= -3.3 && z <= 1.2 && currentY < 2.6) {
-      const t = (1.2 - z) / (1.2 - (-3.3));
-      return THREE.MathUtils.clamp(t, 0, 1) * 2.1;
-    }
-    // Upper Flight (Left side X < 0, Z: -3.3m to +1.2m) -> Mid-Landing (2.1m) to First Floor (4.2m)
-    if (x < 0.0 && z >= -3.3 && z <= 1.2 && currentY >= 1.5) {
-      const t = (z - (-3.3)) / (1.2 - (-3.3));
-      return 2.1 + THREE.MathUtils.clamp(t, 0, 1) * 2.1;
-    }
+    if (z >= -5.6 && z <= -3.3 && curY >= 1.1 && curY <= 3.2) return 2.1;
+    if (x >= 0.0 && z >= -3.3 && z <= 1.2 && curY < 2.6) return THREE.MathUtils.clamp((1.2 - z) / 4.5, 0, 1) * 2.1;
+    if (x < 0.0 && z >= -3.3 && z <= 1.2 && curY >= 1.5) return 2.1 + THREE.MathUtils.clamp((z + 3.3) / 4.5, 0, 1) * 2.1;
   }
-
-  // 2. Standard Ground vs First Floor Slab retention
-  return currentY >= 2.95 ? DIM.floorHeight : 0.0;
+  return curY >= 2.95 ? DIM.floorHeight : 0.0;
 }
 
-function checkHorizontalCollision(nextX, nextZ, y) {
-  const playerBox = new THREE.Box3(
-    new THREE.Vector3(nextX - player.radius, y + 0.35, nextZ - player.radius),
-    new THREE.Vector3(nextX + player.radius, y + 1.65, nextZ + player.radius)
+function checkCollision(nx, nz, y) {
+  const box = new THREE.Box3(
+    new THREE.Vector3(nx - player.radius, y + 0.35, nz - player.radius),
+    new THREE.Vector3(nx + player.radius, y + 1.65, nz + player.radius)
   );
-  for (const box of wallColliders) {
-    if (playerBox.intersectsBox(box)) return true;
-  }
-  return false;
+  return wallColliders.some((wb) => box.intersectsBox(wb));
 }
 
-// Door Interaction
-const toastEl = document.getElementById('interaction-toast');
-function interactNearestDoor() {
-  let nearest = null;
-  let minDist = 2.8;
-  for (const d of interactiveDoors) {
-    const dist = d.pos.distanceTo(player.pos);
-    if (dist < minDist) {
-      minDist = dist;
-      nearest = d;
-    }
-  }
-  if (nearest) {
-    nearest.isOpen = !nearest.isOpen;
-    nearest.pivot.rotation.y = nearest.isOpen ? -1.45 : 0;
-  }
-}
-
-// ============================================================================
-// 9. UI CONTROLS, ZONE TELEPORTATION & HUD TELEMETRY
-// ============================================================================
-function teleportToZone(zoneId) {
-  const z = TELEPORT_ZONES[zoneId];
-  if (!z) return;
-
-  document.querySelectorAll('.zone-btn').forEach((btn) => {
-    btn.classList.toggle('active', Number(btn.dataset.zone) === zoneId);
-  });
-
-  if (z.orbit) {
-    setOrbitMode(true);
-    camera.position.set(16, 13, 28);
-    orbitControls.target.set(0, 3.5, 0);
-  } else {
-    setOrbitMode(false);
-    player.pos.set(z.pos[0], z.pos[1], z.pos[2]);
-    player.yaw = z.yaw;
-  }
-}
-
-function setOrbitMode(enabled) {
-  player.orbitMode = enabled;
-  orbitControls.enabled = enabled;
-  const btn = document.getElementById('btn-orbit');
-  btn.classList.toggle('active', enabled);
-  document.getElementById('mode-title').textContent = enabled
-    ? '🛰️ Exterior Orbit Inspection Mode'
-    : '🚶 Interactive Walkthrough Mode';
-}
-
-function toggleViewMode() {
-  player.thirdPerson = !player.thirdPerson;
-  avatarGroup.visible = player.thirdPerson;
-  document.getElementById('btn-view-mode').textContent = player.thirdPerson
-    ? '🚶 View: 3rd Person'
-    : '👁️ View: 1st Person';
-}
-
-let isCutaway = false;
-function toggleCutaway() {
-  isCutaway = !isCutaway;
-  cutawayMeshes.forEach((m) => { m.visible = !isCutaway; });
-  const btn = document.getElementById('btn-cutaway');
-  btn.textContent = isCutaway ? '🏛️ Front Cutaway: On' : '🏛️ Front Cutaway: Off';
-  btn.classList.toggle('active', isCutaway);
-}
-
-// Bind HUD Buttons
-document.querySelectorAll('.zone-btn').forEach((btn) => {
-  btn.addEventListener('click', () => teleportToZone(Number(btn.dataset.zone)));
+// HUD buttons
+document.getElementById('btn-cutaway').addEventListener('click', (e) => {
+  const isCut = e.currentTarget.classList.toggle('active');
+  cutawayMeshes.forEach((m) => { m.visible = !isCut; });
+  e.currentTarget.textContent = isCut ? '🏛️ Cutaway: On' : '🏛️ Cutaway: Off';
 });
-document.getElementById('btn-view-mode').addEventListener('click', toggleViewMode);
-document.getElementById('btn-cutaway').addEventListener('click', toggleCutaway);
-document.getElementById('btn-orbit').addEventListener('click', () => setOrbitMode(!player.orbitMode));
 document.getElementById('btn-lighting').addEventListener('click', (e) => {
   isGoldenHour = !isGoldenHour;
   applyLightingPreset(isGoldenHour);
   e.currentTarget.textContent = isGoldenHour ? '🌅 Golden Hour' : '☀️ Daylight';
 });
-document.getElementById('btn-reset-pos').addEventListener('click', () => teleportToZone(2));
-document.getElementById('btn-mobile-door').addEventListener('click', interactNearestDoor);
-document.getElementById('btn-mobile-view').addEventListener('click', toggleViewMode);
-
-// Update Zone & Elevation Telemetry
-const roomInd = document.getElementById('room-indicator');
-const elevInd = document.getElementById('elevation-indicator');
-
-function updateHUDTelemetry() {
-  const floorLabel = player.pos.y >= 3.8 ? '1st Floor' : player.pos.y > 0.3 ? 'Staircase' : 'Ground';
-  elevInd.textContent = `Elev: ${player.pos.y.toFixed(1)}m (${floorLabel})`;
-
-  let currentZone = 'Campus Exterior';
-  if (player.pos.z <= 5.8 && player.pos.z >= -5.8 && Math.abs(player.pos.x) <= 23) {
-    if (player.pos.z > 2.6) {
-      currentZone = player.pos.y >= 3.8 ? '1st Floor Corridor' : 'Ground Floor Corridor';
-    } else if (Math.abs(player.pos.x) <= 3.0) {
-      currentZone = 'Central Switchback Staircase';
-    } else {
-      const floorIdx = player.pos.y >= 3.0 ? 1 : 0;
-      const match = ROOM_MANIFEST.find(
-        (r) => r.floor === floorIdx && player.pos.x >= r.xMin && player.pos.x <= r.xMax
-      );
-      if (match) currentZone = `${match.code}: ${match.name}`;
-    }
-  }
-  roomInd.textContent = `Zone: ${currentZone}`;
-
-  // Door proximity prompt
-  const nearDoor = interactiveDoors.find((d) => d.pos.distanceTo(player.pos) < 2.4);
-  toastEl.style.opacity = nearDoor ? '1' : '0';
-  if (nearDoor) {
-    toastEl.textContent = `Press [E] to ${nearDoor.isOpen ? 'Close' : 'Open'} ${nearDoor.roomName}`;
-  }
-}
+document.getElementById('btn-reset-pos').addEventListener('click', () => player.pos.set(0, 0, 9.5));
 
 // ============================================================================
-// 10. MAIN RENDER & PHYSICS LOOP
+// 8. RENDER LOOP
 // ============================================================================
 const clock = new THREE.Clock();
+let syncTimer = 0;
 
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.1);
+  let speed = 0;
 
-  if (player.orbitMode) {
-    orbitControls.update();
-  } else {
-    // Movement Input Vector
-    let moveForward = 0;
-    let moveRight = 0;
-    if (keys['KeyW'] || keys['ArrowUp']) moveForward += 1;
-    if (keys['KeyS'] || keys['ArrowDown']) moveForward -= 1;
-    if (keys['KeyD'] || keys['ArrowRight']) moveRight += 1;
-    if (keys['KeyA'] || keys['ArrowLeft']) moveRight -= 1;
+  if (!player.spectatorMode && !pinModal.classList.contains('open') && !invModal.classList.contains('open')) {
+    let mf = 0, mr = 0;
+    if (keys['KeyW'] || keys['ArrowUp']) mf += 1;
+    if (keys['KeyS'] || keys['ArrowDown']) mf -= 1;
+    if (keys['KeyD'] || keys['ArrowRight']) mr += 1;
+    if (keys['KeyA'] || keys['ArrowLeft']) mr -= 1;
 
-    if (Math.abs(joyVec.x) > 0.05 || Math.abs(joyVec.y) > 0.05) {
-      moveForward -= joyVec.y;
-      moveRight += joyVec.x;
-    }
-
-    const len = Math.hypot(moveForward, moveRight);
+    const len = Math.hypot(mf, mr);
     if (len > 0) {
-      moveForward /= len;
-      moveRight /= len;
-
-      const speed = player.speed * (keys['ShiftLeft'] || keys['ShiftRight'] ? player.sprintMultiplier : 1.0);
+      mf /= len; mr /= len;
+      speed = player.speed * (keys['ShiftLeft'] ? player.sprintMultiplier : 1.0);
       const sin = Math.sin(player.yaw);
       const cos = Math.cos(player.yaw);
-
-      const dx = (-sin * moveForward + cos * moveRight) * speed * dt;
-      const dz = (-cos * moveForward - sin * moveRight) * speed * dt;
-
-      // Sliding X / Z Axis Collision Resolution
-      if (!checkHorizontalCollision(player.pos.x + dx, player.pos.z, player.pos.y)) {
-        player.pos.x += dx;
-      }
-      if (!checkHorizontalCollision(player.pos.x, player.pos.z + dz, player.pos.y)) {
-        player.pos.z += dz;
-      }
+      const dx = (-sin * mf + cos * mr) * speed * dt;
+      const dz = (-cos * mf - sin * mr) * speed * dt;
+      if (!checkCollision(player.pos.x + dx, player.pos.z, player.pos.y)) player.pos.x += dx;
+      if (!checkCollision(player.pos.x, player.pos.z + dz, player.pos.y)) player.pos.z += dz;
     }
 
-    // Smooth Vertical Stair & Floor Elevation Tracking
-    const targetY = computeTargetFloorHeight(player.pos.x, player.pos.z, player.pos.y);
-    player.pos.y = THREE.MathUtils.lerp(player.pos.y, targetY, 0.25);
+    const tY = computeHeight(player.pos.x, player.pos.z, player.pos.y);
+    player.pos.y = THREE.MathUtils.lerp(player.pos.y, tY, 0.28);
+    playerAvatar.root.position.copy(player.pos);
+    playerAvatar.root.rotation.y = player.yaw;
 
-    // Update Avatar Transform
-    avatarGroup.position.copy(player.pos);
-    avatarGroup.rotation.y = player.yaw;
-
-    // Update Camera (1st-Person vs 3rd-Person)
-    const eyePos = new THREE.Vector3(player.pos.x, player.pos.y + 1.62, player.pos.z);
-    const lookDir = new THREE.Vector3(
-      -Math.sin(player.yaw) * Math.cos(player.pitch),
-      Math.sin(player.pitch),
-      -Math.cos(player.yaw) * Math.cos(player.pitch)
-    );
+    const eye = new THREE.Vector3(player.pos.x, player.pos.y + 1.62, player.pos.z);
+    const look = new THREE.Vector3(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
 
     if (player.thirdPerson) {
-      const camOffset = lookDir.clone().multiplyScalar(-3.4);
-      camOffset.y += 0.65;
-      camera.position.copy(eyePos).add(camOffset);
-      camera.lookAt(eyePos.clone().add(lookDir.clone().multiplyScalar(4.0)));
+      playerCamera.position.copy(eye).add(look.clone().multiplyScalar(-3.3)).add(new THREE.Vector3(0, 0.6, 0));
+      playerCamera.lookAt(eye.clone().add(look.clone().multiplyScalar(4.0)));
     } else {
-      camera.position.copy(eyePos);
-      camera.lookAt(eyePos.clone().add(lookDir));
+      playerCamera.position.copy(eye);
+      playerCamera.lookAt(eye.clone().add(look));
+    }
+
+    syncTimer += dt;
+    if (syncTimer >= 0.15) {
+      syncTimer = 0;
+      gameService.updatePosition(activeTeamId, player.pos.x, player.pos.y, player.pos.z, player.yaw, speed > 0 ? 'WALK' : 'IDLE');
     }
   }
 
-  updateHUDTelemetry();
-  renderer.render(scene, camera);
+  playerAvatar.update(dt, speed, false);
+  flagSystem.update(dt);
+
+  // HUD timer & penalty check
+  if (currentTeamState) {
+    const now = Date.now();
+    const end = currentTeamState.completedAt || now;
+    timerEl.textContent = `⏱️ ${formatSec(Math.max(0, Math.floor((end - currentTeamState.startedAt) / 1000)))}`;
+    if (currentTeamState.penaltyActiveUntil > now) {
+      penaltyEl.style.display = 'inline-flex';
+      penaltyEl.textContent = `⚠️ DECOY PENALTY: ${Math.ceil((currentTeamState.penaltyActiveUntil - now) / 1000)}s`;
+    } else {
+      penaltyEl.style.display = 'none';
+    }
+  }
+
+  const nearFlag = flagSystem.findInteractable(player.pos);
+  toastEl.style.opacity = nearFlag && !player.spectatorMode ? '1' : '0';
+  if (nearFlag) toastEl.textContent = `⚡ Press [E] to interact with ${nearFlag.code}`;
+
+  renderer.render(scene, player.spectatorMode ? spectatorCamera : playerCamera);
 }
 
 window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  const w = window.innerWidth, h = window.innerHeight, asp = w / h;
+  playerCamera.aspect = asp;
+  playerCamera.updateProjectionMatrix();
+  spectatorCamera.left = -orthoSize * asp;
+  spectatorCamera.right = orthoSize * asp;
+  spectatorCamera.top = orthoSize;
+  spectatorCamera.bottom = -orthoSize;
+  spectatorCamera.updateProjectionMatrix();
+  renderer.setSize(w, h);
 });
 
 animate();
