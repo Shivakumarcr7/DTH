@@ -1,20 +1,21 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>PESCE Mandya — AIML Department 3D Digital Twin</title>
+  <title>Techyon Twin-Quest — PESCE Mandya AIML 3D Digital Twin</title>
   <style>
     :root {
-      --bg-glass: rgba(20, 26, 35, 0.86);
-      --bg-glass-light: rgba(34, 43, 56, 0.78);
-      --border-glass: rgba(255, 255, 255, 0.14);
-      --accent-teal: #17b897;
+      --bg-glass: rgba(15, 23, 42, 0.88);
+      --bg-glass-light: rgba(30, 41, 59, 0.82);
+      --border-glass: rgba(255, 255, 255, 0.15);
+      --accent-teal: #14b8a6;
+      --accent-cyan: #38bdf8;
       --accent-amber: #f59e0b;
-      --accent-purple: #8b5cf6;
-      --text-main: #f3f4f6;
-      --text-muted: #9ca3af;
+      --accent-rose: #f43f5e;
+      --accent-emerald: #10b981;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
     }
 
     * {
@@ -30,7 +31,8 @@
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #111827;
+      background: #0f172a;
+      color: var(--text-main);
     }
 
     #canvas-container {
@@ -41,7 +43,7 @@
       z-index: 1;
     }
 
-    /* HUD Overlay Layer */
+    /* Main HUD Layer */
     .hud {
       position: absolute;
       inset: 0;
@@ -50,7 +52,7 @@
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      padding: 16px 20px;
+      padding: 14px 18px;
     }
 
     .hud-top {
@@ -74,42 +76,85 @@
       backdrop-filter: blur(12px);
       border: 1px solid var(--border-glass);
       color: var(--text-main);
-      padding: 7px 14px;
+      padding: 7px 13px;
       border-radius: 999px;
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.2s ease;
+      transition: all 0.18s ease;
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
     }
 
     .pill:hover {
-      background: rgba(40, 52, 70, 0.92);
+      background: rgba(30, 41, 59, 0.95);
       transform: translateY(-1px);
     }
 
     .pill.active {
-      background: rgba(23, 184, 151, 0.25);
+      background: rgba(20, 184, 166, 0.25);
       border-color: var(--accent-teal);
       color: #5eead4;
     }
 
     .pill.amber {
-      background: rgba(245, 158, 11, 0.2);
-      border-color: rgba(245, 158, 11, 0.5);
+      background: rgba(245, 158, 11, 0.22);
+      border-color: rgba(245, 158, 11, 0.55);
       color: #fde68a;
     }
 
-    /* Middle Side Panels */
+    .pill.firebase-connected {
+      background: rgba(16, 185, 129, 0.2);
+      border-color: rgba(16, 185, 129, 0.6);
+      color: #6ee7b7;
+    }
+
+    .pill.emerald {
+      background: linear-gradient(135deg, #059669, #10b981);
+      border-color: #6ee7b7;
+      color: #ffffff;
+      animation: pulseGlow 1.6s infinite;
+    }
+
+    @keyframes pulseGlow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+      50% { box-shadow: 0 0 18px 4px rgba(16, 185, 129, 0.75); }
+    }
+
+    select.team-select {
+      background: var(--bg-glass);
+      color: #38bdf8;
+      border: 1px solid rgba(56, 189, 248, 0.45);
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      outline: none;
+    }
+
+    #penalty-banner {
+      display: none;
+      background: rgba(190, 18, 60, 0.92);
+      border: 1px solid #fda4af;
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    /* Middle Panels */
     .hud-middle {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
       flex: 1;
-      margin-top: 14px;
+      margin-top: 12px;
+      gap: 12px;
     }
 
     .zone-panel {
@@ -117,118 +162,308 @@
       backdrop-filter: blur(14px);
       border: 1px solid var(--border-glass);
       border-radius: 14px;
-      padding: 14px;
-      width: 230px;
+      padding: 13px;
+      width: 235px;
       pointer-events: auto;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
     }
 
     .zone-title {
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 0.08em;
-      color: #38bdf8;
+      color: var(--accent-cyan);
       text-transform: uppercase;
-      margin-bottom: 10px;
+      margin-bottom: 9px;
       display: flex;
       align-items: center;
-      gap: 6px;
+      justify-content: space-between;
     }
 
     .zone-btn {
       width: 100%;
       background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.08);
       color: var(--text-main);
-      padding: 9px 11px;
+      padding: 8px 10px;
       border-radius: 8px;
-      font-size: 12.5px;
+      font-size: 12px;
       font-weight: 500;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 6px;
+      margin-bottom: 5px;
       cursor: pointer;
-      transition: all 0.18s ease;
+      transition: all 0.16s ease;
     }
 
-    .zone-btn:last-child {
-      margin-bottom: 0;
-    }
-
-    .zone-btn:hover {
-      background: rgba(255, 255, 255, 0.12);
-    }
-
+    .zone-btn:hover { background: rgba(255, 255, 255, 0.12); }
     .zone-btn.active {
       background: rgba(20, 184, 166, 0.28);
       border-color: var(--accent-teal);
       color: #fff;
     }
 
-    .zone-key {
-      font-size: 11px;
-      color: var(--text-muted);
-      font-weight: 700;
-    }
-
-    /* Right Info Panel */
     .info-panel {
       background: var(--bg-glass);
       backdrop-filter: blur(14px);
       border: 1px solid var(--border-glass);
       border-radius: 14px;
-      padding: 16px;
-      width: 310px;
+      padding: 15px;
+      width: 325px;
       pointer-events: auto;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
     }
 
     .info-header {
       color: var(--accent-amber);
-      font-size: 14px;
+      font-size: 13.5px;
       font-weight: 700;
       margin-bottom: 6px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
     }
 
     .info-desc {
-      font-size: 12px;
+      font-size: 11.8px;
       line-height: 1.45;
-      color: #d1d5db;
-      margin-bottom: 12px;
+      color: #cbd5e1;
+      margin-bottom: 10px;
     }
 
     .status-box {
       background: rgba(16, 185, 129, 0.13);
       border: 1px solid rgba(16, 185, 129, 0.35);
       border-radius: 8px;
-      padding: 8px 10px;
+      padding: 7px 10px;
       font-size: 11px;
       color: #a7f3d0;
       display: flex;
       justify-content: space-between;
-      margin-bottom: 12px;
+      margin-bottom: 10px;
     }
 
     .controls-legend {
-      font-size: 11.5px;
+      font-size: 11px;
       color: var(--text-muted);
       line-height: 1.7;
     }
 
     .kbd {
-      background: rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.15);
       color: #fff;
-      padding: 2px 6px;
+      padding: 1px 6px;
       border-radius: 4px;
-      font-size: 10.5px;
+      font-size: 10px;
       font-weight: 700;
     }
 
-    /* Bottom Bar */
+    /* God-Mode Spectator Leaderboard */
+    #spectator-panel {
+      display: none;
+      background: rgba(15, 23, 42, 0.94);
+      backdrop-filter: blur(16px);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      border-radius: 14px;
+      padding: 15px;
+      width: 410px;
+      max-height: 72vh;
+      overflow-y: auto;
+      pointer-events: auto;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+    }
+
+    .spec-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11.5px;
+      margin-top: 8px;
+    }
+
+    .spec-table th {
+      text-align: left;
+      color: var(--text-muted);
+      padding: 6px 4px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .spec-table td {
+      padding: 7px 4px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    /* Notifications & Modals */
+    #interaction-toast {
+      position: absolute;
+      bottom: 76px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.94);
+      border: 1px solid var(--accent-teal);
+      color: #fff;
+      padding: 9px 20px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      z-index: 20;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.18s ease;
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.45);
+    }
+
+    #feedback-banner {
+      position: absolute;
+      top: 72px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--accent-cyan);
+      color: #fff;
+      padding: 10px 22px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 700;
+      z-index: 35;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+    }
+
+    .modal-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: rgba(2, 6, 23, 0.72);
+      backdrop-filter: blur(8px);
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal-card {
+      background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      border-radius: 16px;
+      width: 100%;
+      max-width: 430px;
+      padding: 22px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+      pointer-events: auto;
+    }
+
+    .modal-badge {
+      display: inline-block;
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: rgba(20, 184, 166, 0.2);
+      color: #5eead4;
+      margin-bottom: 8px;
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .modal-desc {
+      font-size: 12.5px;
+      color: #cbd5e1;
+      line-height: 1.5;
+      margin-bottom: 16px;
+    }
+
+    .pin-input {
+      width: 100%;
+      background: #020617;
+      border: 2px solid rgba(56, 189, 248, 0.45);
+      border-radius: 10px;
+      color: #38bdf8;
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: 0.45em;
+      text-align: center;
+      padding: 12px;
+      outline: none;
+      margin-bottom: 10px;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .pin-input:focus {
+      border-color: var(--accent-teal);
+      box-shadow: 0 0 15px rgba(20, 184, 166, 0.35);
+    }
+
+    .modal-msg {
+      min-height: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: var(--accent-rose);
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .btn {
+      padding: 9px 16px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: #e2e8f0;
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #0d9488, #0284c7);
+      color: #fff;
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .inventory-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      margin-bottom: 16px;
+    }
+
+    .inv-slot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .inv-slot.collected {
+      background: rgba(16, 185, 129, 0.14);
+      border-color: rgba(16, 185, 129, 0.45);
+    }
+
     .hud-bottom {
       display: flex;
       justify-content: space-between;
@@ -241,52 +476,19 @@
       background: var(--bg-glass);
       backdrop-filter: blur(12px);
       border: 1px solid var(--border-glass);
-      color: #d1d5db;
-      padding: 8px 16px;
+      color: #cbd5e1;
+      padding: 8px 15px;
       border-radius: 999px;
-      font-size: 12px;
+      font-size: 11.5px;
       pointer-events: auto;
     }
 
-    .cta-btn {
-      background: linear-gradient(135deg, #7c3aed, #4f46e5);
-      border: 1px solid rgba(255,255,255,0.25);
-      color: #fff;
-      padding: 9px 18px;
-      border-radius: 999px;
-      font-size: 12.5px;
-      font-weight: 600;
-      cursor: pointer;
-      pointer-events: auto;
-      box-shadow: 0 6px 20px rgba(124, 58, 237, 0.45);
-    }
-
-    /* Interaction Prompt */
-    #interaction-toast {
-      position: absolute;
-      bottom: 78px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(15, 23, 42, 0.92);
-      border: 1px solid var(--accent-teal);
-      color: #fff;
-      padding: 8px 18px;
-      border-radius: 999px;
-      font-size: 13px;
-      font-weight: 600;
-      z-index: 20;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.2s ease;
-    }
-
-    /* Mobile Touch Controls */
     #mobile-controls {
       display: none;
       position: absolute;
-      bottom: 70px;
-      left: 24px;
-      right: 24px;
+      bottom: 66px;
+      left: 20px;
+      right: 20px;
       z-index: 25;
       justify-content: space-between;
       align-items: flex-end;
@@ -294,8 +496,8 @@
     }
 
     .joystick-zone {
-      width: 110px;
-      height: 110px;
+      width: 105px;
+      height: 105px;
       border-radius: 50%;
       background: rgba(255, 255, 255, 0.12);
       border: 2px solid rgba(255, 255, 255, 0.3);
@@ -305,34 +507,30 @@
     }
 
     .joystick-knob {
-      width: 44px;
-      height: 44px;
+      width: 42px;
+      height: 42px;
       border-radius: 50%;
-      background: rgba(23, 184, 151, 0.85);
+      background: rgba(20, 184, 166, 0.88);
       position: absolute;
-      top: 31px;
-      left: 31px;
+      top: 30px;
+      left: 30px;
       pointer-events: none;
     }
 
-    .mobile-actions {
-      display: flex;
-      gap: 10px;
-      pointer-events: auto;
-    }
-
-    @media (max-width: 900px) {
+    @media (max-width: 950px) {
       .info-panel { display: none; }
-      .zone-panel { width: 185px; padding: 10px; }
       #mobile-controls { display: flex; }
     }
   </style>
 
+  <!-- Modular Import Map with Three.js and Firebase 10.8 -->
   <script type="importmap">
     {
       "imports": {
         "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js"
       }
     }
   </script>
@@ -340,73 +538,153 @@
 <body>
   <div id="canvas-container"></div>
 
-  <div id="interaction-toast">Press [E] to Toggle Door</div>
+  <div id="interaction-toast">Interact — Press [E]</div>
+  <div id="feedback-banner">Flag Collected!</div>
 
-  <!-- HUD OVERLAY -->
+  <!-- HUD -->
   <div class="hud">
-    <!-- Top Navigation Bar -->
     <div class="hud-top">
       <div class="pill-group">
-        <div class="pill">01 / Welcome</div>
-        <div class="pill amber">02 / 3D Digital Twin</div>
-        <div class="pill">03 / AI Agent Hub</div>
+        <select id="team-selector" class="team-select" title="Switch Active Team Session"></select>
+        <div class="pill active" id="hud-flag-counter">🚩 Flags: 0 / 5</div>
+        <button class="pill" id="btn-backpack">🎒 Backpack (I)</button>
+        <div class="pill" id="hud-timer">⏱️ 00:00</div>
+        <div id="penalty-banner">⚠️ PENALTY: 30s</div>
+        <button class="pill emerald" id="btn-submit-run" style="display: none;">🏆 SUBMIT COMPLETED RUN (5/5)</button>
       </div>
 
       <div class="pill-group">
+        <div class="pill amber" id="conn-badge">🔌 CONNECTING FIREBASE...</div>
         <button class="pill active" id="btn-view-mode">🚶 View: 3rd Person</button>
-        <button class="pill" id="btn-cutaway">🏛️ Front Cutaway: Off</button>
-        <button class="pill" id="btn-orbit">🛰️ Orbit Exterior</button>
-        <button class="pill amber" id="btn-lighting">🌅 Golden Hour</button>
-        <button class="pill" id="btn-quality">⚡ Preset: RTX 3050 Balanced</button>
+        <button class="pill" id="btn-cutaway">🏛️ Cutaway: Off</button>
+        <button class="pill" id="btn-spectator">👁️ God-Mode Spectator (G)</button>
+        <button class="pill" id="btn-lighting">🌅 Golden Hour</button>
       </div>
     </div>
 
-    <!-- Left Walkthrough Zones & Right Info Card -->
     <div class="hud-middle">
       <div class="zone-panel">
-        <div class="zone-title">📍 Walkthrough Zones</div>
-        <button class="zone-btn active" data-zone="1"><span>🏛️ Exterior Facade</span><span class="zone-key">1</span></button>
-        <button class="zone-btn" data-zone="2"><span>🚪 Main Entrance Portico</span><span class="zone-key">2</span></button>
-        <button class="zone-btn" data-zone="3"><span>🪜 Switchback Stairs</span><span class="zone-key">3</span></button>
-        <button class="zone-btn" data-zone="4"><span>🚶 1st Floor Corridor</span><span class="zone-key">4</span></button>
-        <button class="zone-btn" data-zone="5"><span>💻 AI & ML Lab (F-L1)</span><span class="zone-key">5</span></button>
-        <button class="zone-btn" data-zone="6"><span>🎓 Smart Classroom (F-R1)</span><span class="zone-key">6</span></button>
+        <div class="zone-title">
+          <span>📍 Campus Zones</span>
+          <span style="font-size: 10px; color: #94a3b8;">Keys 1–6</span>
+        </div>
+        <button class="zone-btn" data-zone="1"><span>🏛️ Exterior Facade</span><span>1</span></button>
+        <button class="zone-btn active" data-zone="2"><span>🚪 Entrance Portico</span><span>2</span></button>
+        <button class="zone-btn" data-zone="3"><span>🪜 Switchback Stairs</span><span>3</span></button>
+        <button class="zone-btn" data-zone="4"><span>🚶 1st Floor Corridor</span><span>4</span></button>
+        <button class="zone-btn" data-zone="5"><span>💻 AI & ML Lab (F-L1)</span><span>5</span></button>
+        <button class="zone-btn" data-zone="6"><span>🎓 Smart Classroom (F-R1)</span><span>6</span></button>
       </div>
 
-      <div class="info-panel">
-        <div class="info-header" id="mode-title">🚶 Interactive Walkthrough Mode</div>
-        <div class="info-desc" id="mode-desc">
-          Explore the reconstructed 2-floor, 8-room PESCE Mandya AIML & CSE building with realistic facade pilasters, central switchback stairs, and corridor shoe racks.
+      <div class="info-panel" id="player-info-panel">
+        <div class="info-header" id="mode-title">⚡ Techyon Twin-Quest Active</div>
+        <div class="info-desc">
+          Live Firebase multi-team session. Locate all <b>5 legitimate glowing Flags</b>, unlock their 4-digit PINs, and avoid decoy traps (+30s penalty).
         </div>
         <div class="status-box">
-          <span id="room-indicator">Zone: Exterior Forecourt</span>
+          <span id="room-indicator">Zone: Entrance Portico</span>
           <span id="elevation-indicator">Elev: 0.0m (Ground)</span>
         </div>
         <div class="controls-legend">
-          <div><span class="kbd">WASD</span> / <span class="kbd">Arrows</span> Move &nbsp;|&nbsp; <span class="kbd">Shift</span> Sprint</div>
-          <div><span class="kbd">Mouse Drag</span> Look / Orbit 360° &nbsp;|&nbsp; <span class="kbd">V</span> 1P / 3P View</div>
-          <div><span class="kbd">E</span> / <span class="kbd">Click</span> Open/Close Doors &nbsp;|&nbsp; <span class="kbd">C</span> Cutaway Wall</div>
+          <div><span class="kbd">WASD</span> / <span class="kbd">Arrows</span> Move &nbsp;|&nbsp; <span class="kbd">Shift</span> Run</div>
+          <div><span class="kbd">E</span> / <span class="kbd">Click</span> Interact Flag or Door &nbsp;|&nbsp; <span class="kbd">I</span> Backpack</div>
+          <div><span class="kbd">V</span> 1P/3P Camera &nbsp;|&nbsp; <span class="kbd">G</span> Spectator God-Mode</div>
         </div>
+      </div>
+
+      <div id="spectator-panel">
+        <div class="zone-title">
+          <span>🛰️ GOD-MODE ORTHOGRAPHIC SPECTATOR</span>
+          <span id="spec-scoring-label" style="color:#fde68a;">LIVE FIREBASE CLOUD</span>
+        </div>
+        <table class="spec-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Team</th>
+              <th>Flags</th>
+              <th>Penalty</th>
+              <th>Status / Time</th>
+            </tr>
+          </thead>
+          <tbody id="spectator-tbody"></tbody>
+        </table>
       </div>
     </div>
 
-    <!-- Mobile Touch Joystick -->
     <div id="mobile-controls">
       <div class="joystick-zone" id="joystick-zone">
         <div class="joystick-knob" id="joystick-knob"></div>
       </div>
-      <div class="mobile-actions">
-        <button class="pill active" id="btn-mobile-door">🚪 Door (E)</button>
-        <button class="pill" id="btn-mobile-view">👁️ 1P/3P</button>
+      <div class="pill-group">
+        <button class="pill active" id="btn-mobile-interact">⚡ Interact (E)</button>
+        <button class="pill" id="btn-mobile-bag">🎒 Bag</button>
       </div>
     </div>
 
-    <!-- Bottom Bar -->
     <div class="hud-bottom">
-      <div class="status-bar">
-        Stage 02 / Physical Stair Climbing • 2 Floors & 8 Rooms • Dynamic Hinged Doors • RTX 3050 Optimized
+      <div class="status-bar" id="bottom-status-text">
+        Techyon Twin-Quest • Cloud Firestore Multi-Team Sync • PESCE AIML Department
       </div>
-      <button class="cta-btn" id="btn-reset-pos">Respawn at Entrance ↺</button>
+      <div class="pill-group">
+        <button class="pill" id="btn-reset-pos">Respawn at Portico ↺</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PIN Modal -->
+  <div class="modal-backdrop" id="pin-modal">
+    <div class="modal-card">
+      <div class="modal-badge" id="pin-modal-code">TQ-ALPHA</div>
+      <div class="modal-title" id="pin-modal-title">Unlock Tachyon Flag</div>
+      <div class="modal-desc" id="pin-modal-desc">
+        Enter the 4-digit security PIN. Leading zeroes (e.g., 0047) are preserved.
+      </div>
+      <input
+        type="text"
+        id="pin-input-field"
+        class="pin-input"
+        maxlength="4"
+        inputmode="numeric"
+        placeholder="0000"
+        autocomplete="off"
+      />
+      <div class="modal-msg" id="pin-modal-error"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btn-pin-cancel">Cancel (Esc)</button>
+        <button class="btn btn-primary" id="btn-pin-submit">Unlock & Collect (Enter)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Backpack Inventory Modal -->
+  <div class="modal-backdrop" id="inventory-modal">
+    <div class="modal-card">
+      <div class="modal-badge">TACHYON BACKPACK INVENTORY</div>
+      <div class="modal-title" id="inv-team-title">Team Backpack (0 / 5 Flags)</div>
+      <div class="modal-desc">
+        Collected flags are mounted on your 3D avatar's backpack and synchronized in Firestore.
+      </div>
+      <div class="inventory-grid" id="inventory-slots-container"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btn-inv-close">Close Backpack (Esc)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Final Run Submission Modal -->
+  <div class="modal-backdrop" id="submit-modal">
+    <div class="modal-card">
+      <div class="modal-badge">AUTHORITATIVE RUN FINALIZATION</div>
+      <div class="modal-title">Finalize 5/5 Twin-Quest Run?</div>
+      <div class="modal-desc">
+        All 5 flags are verified. Confirming will lock your team's completion timestamp in Firebase.
+      </div>
+      <div id="submit-summary-box" style="background: rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.4); padding:12px; border-radius:10px; font-size:12.5px; line-height:1.6; margin-bottom:14px;"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="btn-submit-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-submit-confirm">Confirm & Lock Final Time</button>
+      </div>
     </div>
   </div>
 
